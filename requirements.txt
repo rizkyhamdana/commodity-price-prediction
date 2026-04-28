@@ -1,0 +1,8 @@
+pandas
+numpy
+statsmodels
+pmdarima
+matplotlib
+requests
+fastapi
+uvicorn

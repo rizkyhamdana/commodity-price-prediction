@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.venv/
+
+# Data & Output (Hasil generate script)
+output/
+*.log
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Local Data (Opsional: Jika Anda ingin database lokal tidak diupload)
+# Data lengkap Komoditas 6 Bulan.json
