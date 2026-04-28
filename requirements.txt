@@ -2,7 +2,8 @@ pandas
 numpy
 statsmodels
 pmdarima
+prophet
+xgboost
 matplotlib
+holidays
 requests
-fastapi
-uvicorn
