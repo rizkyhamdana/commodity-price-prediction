@@ -30,21 +30,29 @@ COMMODITIES = [
 ]
 
 def generate_commodity_insight(name, trend, forecast_pct, alert):
-    # Logika Gabungan Alert + Trend
-    if alert and "TURUN" in trend:
-        msg = f"{alert} Berita baiknya, setelah lonjakan ini harga {name} diprediksi akan segera melandai turun sekitar {abs(forecast_pct)}%."
-    elif alert and "NAIK" in trend:
-        msg = f"Waspada! {alert} dan diprediksi harga {name} masih akan terus merangkak naik sekitar {abs(forecast_pct)}%."
-    elif alert:
-        msg = f"{alert} Namun ke depannya, harga {name} diprediksi akan stabil di level baru ini."
-    else:
-        # Kondisi Normal (Tanpa Alert Hari Ini)
-        if "NAIK" in trend:
-            msg = f"Tren {name} terpantau naik. Prediksi menunjukkan kenaikan sekitar {abs(forecast_pct)}% minggu depan."
-        elif "TURUN" in trend:
-            msg = f"Tren {name} sedang menurun. Harga diprediksi turun sekitar {abs(forecast_pct)}%."
+    """Menghasilkan kalimat analisis yang manusiawi dan tidak kontradiktif."""
+    if alert:
+        # Jika ada lonjakan/penurunan tajam HARI INI
+        if "Penurunan" in alert:
+            if forecast_pct > 0.5:
+                msg = f"Meskipun hari ini {alert.lower().replace('!', '')}, namun tetap waspada karena diprediksi harga {name} akan mulai merangkak naik kembali sekitar {forecast_pct}% minggu depan."
+            else:
+                msg = f"{alert} Ini saat yang tepat untuk stok barang, karena tren ke depan diprediksi masih akan melandai turun."
+        elif "Lonjakan" in alert:
+            if forecast_pct < -0.5:
+                msg = f"{alert} Namun kabar baiknya, harga {name} diprediksi tidak akan lama tinggi dan segera melandai turun sekitar {abs(forecast_pct)}%."
+            else:
+                msg = f"{alert} Harap antisipasi pengeluaran lebih, karena tren menunjukkan harga {name} masih berpotensi naik."
         else:
-            msg = f"Harga {name} terpantau stabil dan diperkirakan tidak banyak berubah dalam waktu dekat."
+            msg = f"{alert} Tetap pantau perkembangan harga {name} setiap hari."
+    else:
+        # Kondisi harga relatif stabil hari ini
+        if "NAIK" in trend:
+            msg = f"Tren {name} terpantau mulai merangkak naik. Prediksi menunjukkan kenaikan sekitar {abs(forecast_pct)}% minggu depan."
+        elif "TURUN" in trend:
+            msg = f"Kabar baik, tren {name} sedang menurun. Harga diprediksi turun sekitar {abs(forecast_pct)}% dalam waktu dekat."
+        else:
+            msg = f"Harga {name} terpantau stabil dan diperkirakan tidak banyak berubah dalam beberapa hari ke depan."
 
     msg += "\n\nSelalu pantau harga harian, karena faktor pasar sangat dinamis."
     return msg
@@ -84,6 +92,7 @@ def run_all_predictions():
     success_count = 0
     fail_count = 0
     mobile_data = []
+    audit_data = []
     
     # Mapping Satuan Komoditas
     commodity_units = {
@@ -105,8 +114,8 @@ def run_all_predictions():
         try:
             api_status = USE_LIVE_API if i == 1 else False
             
-            # 1. Run Forecast
-            forecast_df, mape = run_pipeline(
+            # 1. Run Forecast (Sekarang ambil 5 return value: df, mape, winner, scores, all_fc)
+            f_df, mape, winner, all_scores, all_fc = run_pipeline(
                 json_path=HISTORY_FILE,
                 commodity_name=commodity,
                 n_days=FORECAST_DAYS,
@@ -186,10 +195,10 @@ def run_all_predictions():
                 "price": int(round(last_actual))
             }]
             # Tambahkan hasil prediksi besok dan seterusnya (Bulatkan ke Rupiah)
-            for _, r in forecast_df.iterrows():
+            for _, r in f_df.iterrows():
                 forecast_points.append({
                     "date": r["date"],
-                    "price": int(round(r["predicted_price"]))
+                    "price": int(round(r["price"]))
                 })
 
             # 5. Build Object
@@ -208,17 +217,19 @@ def run_all_predictions():
             }
 
             # Prediksi untuk penentuan Trend Masa Depan
-            pred_end = float(forecast_df["predicted_price"].iloc[-1])
+            pred_end = float(f_df["price"].iloc[-1])
             forecast_change_pct = round(((pred_end - last_actual) / last_actual) * 100, 2)
             if forecast_change_pct == -0.0: forecast_change_pct = 0.0
 
             # Tingkat Keandalan (Reliability) berdasarkan MAPE
-            if mape < 1.5:
+            if mape < 2.0:
                 reliability = "SANGAT TINGGI"
-            elif mape < 3.0:
+            elif mape < 5.0:
                 reliability = "TINGGI"
-            else:
+            elif mape < 15.0:
                 reliability = "CUKUP"
+            else:
+                reliability = "RENDAH (PERINGATAN)"
             
             # Trend murni untuk Masa Depan (Ramalan)
             if forecast_change_pct > 0.5:
@@ -256,6 +267,22 @@ def run_all_predictions():
                 "sub_commodities": sub_items
             }
             mobile_data.append(item_data)
+
+            # Data untuk Audit Log (Teknis & Super Lengkap)
+            audit_data.append({
+                "commodity": commodity,
+                "winner_today": winner,
+                "winner_mape_score": round(float(mape), 2),
+                "all_model_mape": {k: round(float(v), 2) for k, v in all_scores.items()},
+                "forecast_comparison": {
+                    "dates": [item["date"] for item in f_df.to_dict(orient="records")],
+                    "arima": [float(p) for p in all_fc.get("arima", [])],
+                    "ets": [float(p) for p in all_fc.get("ets", [])],
+                    "prophet": [float(p) for p in all_fc.get("prophet", [])],
+                    "xgboost": [float(p) for p in all_fc.get("xgboost", [])]
+                }
+            })
+
             success_count += 1
             
         except Exception as e:
@@ -281,9 +308,27 @@ def run_all_predictions():
     with open(mobile_path, "w", encoding="utf-8") as f:
         json.dump(mobile_backend, f, indent=2, ensure_ascii=False)
 
+    # Technical Audit Log (Format khusus evaluasi)
+    archive_dir = "archive"
+    if not os.path.exists(archive_dir): os.makedirs(archive_dir)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    audit_path = os.path.join(archive_dir, f"audit_{today_str}.json")
+    
+    audit_log = {
+        "execution_date": today_str,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "commodities_evaluated": success_count,
+        "audit_results": audit_data
+    }
+    
+    with open(audit_path, "w", encoding="utf-8") as f:
+        json.dump(audit_log, f, indent=2, ensure_ascii=False)
+
     print("\n" + "═" * 60)
     print(f" ✅ Success : {success_count} Commodities")
     print(f" 📱 Mobile Backend Ready at: {mobile_path}")
+    print(f" 📂 Technical Audit Log at: {audit_path}")
+    print(" 💡 Bandingkan isi Audit Log ini dengan harga asli minggu depan!")
     print("═" * 60 + "\n")
 
 

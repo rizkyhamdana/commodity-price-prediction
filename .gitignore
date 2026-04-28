@@ -25,6 +25,7 @@ venv/
 
 # Data & Output (Hasil generate script)
 output/
+archive/
 *.log
 .DS_Store
 

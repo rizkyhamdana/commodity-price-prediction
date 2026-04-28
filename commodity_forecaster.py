@@ -1,391 +1,343 @@
-import json
 import os
-import sys
-import warnings
-import logging
+import json
 import requests
-from datetime import datetime
-
-import matplotlib
-matplotlib.use("Agg")
-
-import numpy as np
 import pandas as pd
+import numpy as np
+import logging
+from datetime import datetime, timedelta
+import warnings
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from statsmodels.tsa.stattools import adfuller
-from statsmodels.tsa.arima.model import ARIMA
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from pmdarima import auto_arima
-from prophet import Prophet
-import holidays
 
-# Suppress warnings
+import warnings
+
+# Bungkam semua peringatan teknis agar log bersih
 warnings.filterwarnings("ignore")
-
-# ──────────────────────────────────────────────
-#  Logging Configuration
-# ──────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
+# Impor Model dengan penanganan error yang benar
+try:
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+    HAS_STATSMODELS = True
+except Exception as e:
+    logger.warning(f"⚠️ Statsmodels error: {e}")
+    HAS_STATSMODELS = False
 
-# ══════════════════════════════════════════════
-#  SECTION 1: DATA LOADING
-# ══════════════════════════════════════════════
+try:
+    from pmdarima import auto_arima
+    HAS_PMDARIMA = True
+except Exception:
+    HAS_PMDARIMA = False
+
+try:
+    from prophet import Prophet
+    HAS_PROPHET = True
+except Exception:
+    HAS_PROPHET = False
+
+try:
+    import xgboost as xgb
+    HAS_XGBOOST = True
+except Exception as e:
+    logger.warning(f"⚠️ XGBoost error: {e}")
+    HAS_XGBOOST = False
 
 def load_json_data(filepath: str) -> tuple[pd.DataFrame, str]:
-    """Load data dari file lokal."""
+    """Membaca data riwayat harga dari JSON lokal."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"File tidak ditemukan: {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
         raw = json.load(f)
-    
     if isinstance(raw, dict) and "data" in raw:
         df = pd.DataFrame(raw["data"])
-        return df, "dataframe"
-    return pd.DataFrame(raw), "dataframe"
+    else:
+        df = pd.DataFrame(raw)
+    return df, "dataframe"
 
-
-def update_history_with_api(df: pd.DataFrame, history_path: str, sim_date: str = None) -> pd.DataFrame:
-    """
-    Ambil semua data yang hilang dari API BI (PIHPS) secara otomatis.
-    Menarik dari tanggal terakhir di lokal sampai hari ini (atau sim_date).
-    """
+def update_history_with_api(df: pd.DataFrame, history_path: str, sim_date: str = None, force_start_date: str = None) -> pd.DataFrame:
+    """Mengupdate data sejarah menggunakan API Bank Indonesia (PIHPS) dengan chunking 180 hari."""
     now_obj = datetime.strptime(sim_date, "%Y-%m-%d") if sim_date else datetime.now()
     
-    # Cari tanggal terakhir di history (kolom yang formatnya DD/MM/YYYY)
-    date_cols = []
-    for col in df.columns:
-        try:
-            date_cols.append(datetime.strptime(col, "%d/%m/%Y"))
-        except: continue
-    
-    if not date_cols:
-        logger.error("❌ Tidak dapat menemukan kolom tanggal di history.")
-        return df
-        
-    last_date = max(date_cols)
-    start_date_obj = last_date + pd.Timedelta(days=1)
-    
-    if start_date_obj > now_obj:
+    if force_start_date:
+        start_date_obj = datetime.strptime(force_start_date, "%Y-%m-%d")
+        date_cols = []
+        for col in df.columns:
+            try: date_cols.append(datetime.strptime(col, "%d/%m/%Y"))
+            except: continue
+        end_date_obj = min(date_cols) - timedelta(days=1) if date_cols else now_obj
+    else:
+        date_cols = []
+        for col in df.columns:
+            try: date_cols.append(datetime.strptime(col, "%d/%m/%Y"))
+            except: continue
+        if not date_cols: return df
+        start_date_obj = max(date_cols) + timedelta(days=1)
+        end_date_obj = now_obj
+
+    if start_date_obj > end_date_obj:
         logger.info("✅ Data history sudah up-to-date.")
         return df
 
-    start_str = start_date_obj.strftime("%Y-%m-%d")
-    end_str   = now_obj.strftime("%Y-%m-%d")
-
-    # Generate URL BI PIHPS dengan Date Range
-    api_url = (
-        f"https://www.bi.go.id/hargapangan/WebSite/TabelHarga/GetGridDataDaerah?"
-        f"price_type_id=1&comcat_id=&province_id=&regency_id=&market_id=&tipe_laporan=1"
-        f"&start_date={start_str}&end_date={end_str}&_={int(now_obj.timestamp()*1000)}"
-    )
-
-    logger.info(f"🌐 Menarik data range: {start_str} s/d {end_str}")
-    try:
-        response = requests.get(api_url, timeout=20, headers={'User-Agent': 'Mozilla/5.0'})
-        response.raise_for_status()
-        raw_api = response.json()
+    current_start = start_date_obj
+    while current_start <= end_date_obj:
+        current_end = min(current_start + timedelta(days=180), end_date_obj)
+        start_str = current_start.strftime("%Y-%m-%d")
+        end_str   = current_end.strftime("%Y-%m-%d")
         
-        if "data" not in raw_api or not raw_api["data"]:
-            logger.warning("⚠️ API BI tidak mengembalikan data untuk rentang ini.")
-            return df
-
-        new_entries = raw_api["data"]
-        # Ambil semua kolom tanggal yang ada di hasil API (format DD/MM/YYYY)
-        api_cols = [c for c in new_entries[0].keys() if "/" in c]
-        
-        updated = False
-        for entry in new_entries:
-            name = entry.get("name")
-            if not name: continue
-            
-            mask = df["name"].astype(str).str.strip().str.lower() == name.strip().lower()
-            if mask.any():
-                for col in api_cols:
-                    price = entry.get(col)
-                    if price:
-                        df.loc[mask, col] = str(price)
-                        updated = True
-
-        if updated:
-            raw_to_save = {"data": df.to_dict(orient="records")}
-            with open(history_path, "w", encoding="utf-8") as f:
-                json.dump(raw_to_save, f, indent=2, ensure_ascii=False)
-            logger.info(f"✅ History diperbarui dengan {len(api_cols)} kolom tanggal baru.")
-            
-    except Exception as e:
-        logger.warning(f"⚠️ Gagal update range dari API BI: {e}")
-    
+        api_url = (
+            f"https://www.bi.go.id/hargapangan/WebSite/TabelHarga/GetGridDataDaerah?"
+            f"price_type_id=1&comcat_id=&province_id=&regency_id=&market_id=&tipe_laporan=1"
+            f"&start_date={start_str}&end_date={end_str}&_={int(datetime.now().timestamp()*1000)}"
+        )
+        logger.info(f"🌐 Menarik chunk data: {start_str} s/d {end_str}")
+        try:
+            response = requests.get(api_url, timeout=60, headers={'User-Agent': 'Mozilla/5.0'})
+            response.raise_for_status()
+            raw_api = response.json()
+            if "data" in raw_api and raw_api["data"]:
+                new_entries = raw_api["data"]
+                api_date_cols = [c for c in new_entries[0].keys() if "/" in c]
+                for entry in new_entries:
+                    name_api = str(entry.get("name", "")).strip().lower()
+                    mask = df["name"].astype(str).str.strip().str.lower() == name_api
+                    if mask.any():
+                        for d_col in api_date_cols:
+                            df.loc[mask, d_col] = entry[d_col]
+        except Exception as e:
+            logger.warning(f"⚠️ Gagal menarik data chunk {start_str}: {e}")
+        current_start = current_end + timedelta(days=1)
     return df
 
-
 def extract_commodity_series(df: pd.DataFrame, commodity_name: str, level_filter: int = 1) -> pd.Series:
+    """Mengambil deret waktu harga untuk komoditas spesifik dan membersihkannya."""
     NON_DATE_COLS = {"no", "name", "level"}
     if level_filter is not None and "level" in df.columns:
         df = df[df["level"] == level_filter]
     
     mask = df["name"].astype(str).str.strip().str.lower() == commodity_name.strip().lower()
     if mask.sum() == 0:
-        raise ValueError(f"Komoditas '{commodity_name}' tidak ditemukan.")
+        raise ValueError(f"Komoditas '{commodity_name}' tidak ditemukan di dataset.")
     
     row = df[mask].iloc[0]
     price_dict = {}
     for col in df.columns:
         if col.lower() not in NON_DATE_COLS:
             try:
-                date = pd.to_datetime(col, dayfirst=True)
-                val = str(row[col]).replace(",", "").strip()
-                if val not in ["", "nan", "-", "None"]:
-                    price_dict[date] = float(val)
-            except: pass
+                val = str(row[col]).replace(",", "")
+                if val and val != "nan" and val != "-":
+                    price_dict[datetime.strptime(col, "%d/%m/%Y")] = float(val)
+            except: continue
     
-    series = pd.Series(price_dict).sort_index()
-    return series
-
-
-def handle_missing_dates(series: pd.Series, freq: str = "B") -> pd.Series:
-    full_index = pd.date_range(start=series.index.min(), end=series.index.max(), freq=freq)
-    series_full = series.reindex(full_index).ffill()
-    return series_full
-
-
-# ══════════════════════════════════════════════
-#  SECTION 2: MODELING (ARIMA & ETS)
-# ══════════════════════════════════════════════
-
-def find_best_arima_params(series: pd.Series):
-    """Mencari parameter ARIMA terbaik secara otomatis."""
-    series_log = np.log1p(series)
-    # Jangan paksa trend='t' agar tidak bentrok dengan nilai d (differencing)
-    model = auto_arima(
-        series_log, 
-        seasonal=False, 
-        stepwise=True, 
-        suppress_warnings=True, 
-        error_action="ignore",
-        n_jobs=-1
-    )
-    return {
-        "p": model.order[0], 
-        "d": model.order[1], 
-        "q": model.order[2], 
-        "trend": model.trend
-    }
-
-
-def backtest_model(series: pd.Series, arima_order: dict, test_days: int, model_type: str):
-    n = len(series)
-    train = series.iloc[: n - test_days]
-    test  = series.iloc[n - test_days :]
-    train_log = np.log1p(train)
-
-    if model_type == "arima":
-        model = ARIMA(train_log, order=(arima_order["p"], arima_order["d"], arima_order["q"]), trend=arima_order.get("trend"))
-        fitted = model.fit()
-        pred = np.expm1(fitted.get_forecast(steps=test_days).predicted_mean)
-    elif model_type == "ets":
-        model = ExponentialSmoothing(train_log, trend='add', damped_trend=True)
-        fitted = model.fit()
-        pred = np.expm1(fitted.forecast(steps=test_days))
-    else: # Prophet
-        df_p = train.reset_index()
-        df_p.columns = ['ds', 'y']
-        df_p['ds'] = df_p['ds'].dt.tz_localize(None)
-        m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True)
-        m.add_country_holidays(country_name='ID')
-        m.fit(df_p)
-        future = m.make_future_dataframe(periods=test_days, freq='B')
-        forecast = m.predict(future)
-        pred = pd.Series(forecast['yhat'].tail(test_days).values, index=test.index)
+    if not price_dict:
+        raise ValueError(f"Tidak ada data harga valid untuk {commodity_name}")
     
-    pred.index = test.index
-    mape = float((np.abs((test - pred) / test) * 100).mean())
-    return {"mape": mape, "pred": pred, "test": test}
+    s = pd.Series(price_dict).sort_index()
+    # Cleaning: Isi bolong-bolong data dengan interpolasi linear agar grafik mulus
+    full_idx = pd.date_range(start=s.index.min(), end=s.index.max(), freq='D')
+    s = s.reindex(full_idx).interpolate(method='linear').ffill().bfill()
+    return s
 
-
-def train_final_model(series: pd.Series, arima_order: dict, model_type: str):
-    """
-    Melatih model akhir. Jika ARIMA gagal karena masalah parameter, 
-    otomatis fallback ke ETS.
-    """
-    series_log = np.log1p(series)
+def prepare_ml_features(series):
+    """Mempersiapkan fitur teknis untuk XGBoost."""
+    df = series.to_frame(name='y')
+    # Feature Engineering yang lebih kaya
+    df['day_of_week'] = df.index.dayofweek
+    df['month'] = df.index.month
+    df['day_of_month'] = df.index.day
+    df['is_weekend'] = df.index.dayofweek.isin([5, 6]).astype(int)
     
-    if model_type == "arima":
-        try:
-            model = ARIMA(
-                series_log, 
-                order=(arima_order["p"], arima_order["d"], arima_order["q"]), 
-                trend=arima_order.get("trend")
-            )
-            return model.fit(), "arima"
-        except Exception as e:
-            logger.warning(f"⚠️ ARIMA Gagal ({e}), beralih ke ETS...")
-            model = ExponentialSmoothing(series_log, trend='add', damped_trend=True)
-            return model.fit(), "ets"
-    elif model_type == "ets":
-        model = ExponentialSmoothing(series_log, trend='add', damped_trend=True)
-        return model.fit(), "ets"
-    else: # prophet
-        df_p = series.reset_index()
-        df_p.columns = ['ds', 'y']
-        df_p['ds'] = df_p['ds'].dt.tz_localize(None)
-        m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True)
-        m.add_country_holidays(country_name='ID')
-        m.fit(df_p)
-        return m, "prophet"
-
-
-def forecast_prices(fitted_model, series: pd.Series, n_days: int, model_type: str):
-    """Melakukan prediksi berdasarkan model yang sudah dilatih."""
-    if model_type == "arima":
-        forecast_res = fitted_model.get_forecast(steps=n_days)
-        mean = np.expm1(forecast_res.predicted_mean)
-        conf = np.expm1(forecast_res.conf_int())
-        dates = pd.bdate_range(start=series.index[-1] + pd.Timedelta(days=1), periods=n_days)
-    elif model_type == "ets":
-        mean = np.expm1(fitted_model.forecast(steps=n_days))
-        conf = pd.DataFrame({"lower": mean * 0.98, "upper": mean * 1.02}, index=mean.index)
-        dates = pd.bdate_range(start=series.index[-1] + pd.Timedelta(days=1), periods=n_days)
-    else: # prophet
-        future = fitted_model.make_future_dataframe(periods=n_days, freq='B')
-        forecast = fitted_model.predict(future)
-        res = forecast.tail(n_days)
-        mean = pd.Series(res['yhat'].values, index=res['ds'])
-        conf = pd.DataFrame({"lower": res['yhat_lower'].values, "upper": res['yhat_upper'].values}, index=res['ds'])
-        dates = res['ds']
+    # Fitur Hari Libur Indonesia (Menggunakan library holidays)
+    try:
+        import holidays
+        id_holidays = holidays.Indonesia()
+        df['is_holiday'] = df.index.map(lambda x: 1 if x in id_holidays else 0)
+        
+        # Fitur Kedekatan Hari Raya (H-7 sangat krusial untuk Daging/Ayam)
+        # Kita cek apakah ada hari libur dalam 7 hari ke depan
+        df['holiday_proximity'] = 0
+        for i in range(1, 8):
+            df['holiday_proximity'] += df.index.map(lambda x: 1 if (x + timedelta(days=i)) in id_holidays else 0)
+    except:
+        # Fallback jika library gagal
+        df['is_holiday'] = 0
+        df['holiday_proximity'] = 0
     
-    df = pd.DataFrame({
-        "date": dates.dt.strftime("%Y-%m-%d") if hasattr(dates, 'dt') else [d.strftime("%Y-%m-%d") for d in dates],
-        "predicted_price": mean.values.round(2),
-        "lower_ci": conf.iloc[:, 0].values.round(2),
-        "upper_ci": conf.iloc[:, 1].values.round(2)
-    })
-    return df
-    return df
+    # Fitur Lag dan Window
+    df['lag_1'] = df['y'].shift(1)
+    df['lag_7'] = df['y'].shift(7)
+    df['lag_14'] = df['y'].shift(14)
+    df['rolling_mean_7'] = df['y'].shift(1).rolling(window=7).mean()
+    df['rolling_std_7'] = df['y'].shift(1).rolling(window=7).std()
+    return df.dropna()
 
-
-def save_forecast_to_json(forecast_df: pd.DataFrame, output_path: str, commodity_name: str):
-    """
-    Simpan hasil prediksi ke file JSON.
-    """
-    predictions = forecast_df[["date", "predicted_price"]].to_dict(orient="records")
-    output = {
-        "commodity": commodity_name,
-        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "forecast_days": len(forecast_df),
-        "predictions": predictions
-    }
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output, f, indent=2, ensure_ascii=False)
-    logger.info(f"💾 Prediksi disimpan ke: {output_path}")
-
-
-# ══════════════════════════════════════════════
-#  SECTION 3: VISUALIZATION
-# ══════════════════════════════════════════════
-
-def plot_final(series: pd.Series, forecast_df: pd.DataFrame, commodity: str, path: str, bt_res: dict):
-    series_plot = series.tail(60)
-    f_dates = pd.to_datetime(forecast_df["date"])
+def predict_xgboost(series, n_days):
+    """Prediksi menggunakan XGBoost dengan strategi rekursif."""
+    if not HAS_XGBOOST: return np.array([series.iloc[-1]] * n_days)
     
-    fig, ax = plt.subplots(figsize=(14, 7), facecolor="#0f172a")
-    ax.set_facecolor("#1e293b")
-    ax.grid(color="#334155", linestyle="--", alpha=0.5)
+    df_feat = prepare_ml_features(series)
+    if len(df_feat) < 20: return np.array([series.iloc[-1]] * n_days)
     
-    ax.plot(series_plot.index, series_plot.values, color="#38bdf8", lw=2, label="Historis")
-    ax.plot(f_dates, forecast_df["predicted_price"], color="#f59e0b", lw=2.5, ls="--", marker="o", label="Prediksi")
-    ax.fill_between(f_dates, forecast_df["lower_ci"], forecast_df["upper_ci"], color="#f59e0b", alpha=0.1)
+    feat_cols = ['day_of_week', 'month', 'day_of_month', 'lag_1', 'lag_7', 'lag_14', 'rolling_mean_7', 'rolling_std_7']
+    X = df_feat[feat_cols]
+    y = df_feat['y']
     
-    if bt_res:
-        ax.plot(bt_res["pred"].index, bt_res["pred"].values, color="#a78bfa", ls=":", label="Backtest")
+    model = xgb.XGBRegressor(n_estimators=150, learning_rate=0.07, max_depth=5, objective='reg:squarederror')
+    model.fit(X, y)
+    
+    history = series.copy()
+    forecasts = []
+    curr_date = history.index[-1]
+    
+    for _ in range(n_days):
+        curr_date += timedelta(days=1)
+        feat = pd.DataFrame([{
+            'day_of_week': curr_date.weekday(),
+            'month': curr_date.month,
+            'day_of_month': curr_date.day,
+            'lag_1': history.iloc[-1],
+            'lag_7': history.iloc[-7] if len(history)>=7 else history.iloc[-1],
+            'lag_14': history.iloc[-14] if len(history)>=14 else history.iloc[-1],
+            'rolling_mean_7': history.iloc[-7:].mean(),
+            'rolling_std_7': history.iloc[-7:].std() if len(history)>=7 else 0
+        }])
+        p = model.predict(feat[feat_cols])[0]
+        forecasts.append(p)
+        history = pd.concat([history, pd.Series([p], index=[curr_date])])
+    return np.array(forecasts)
 
-    ax.set_title(f"Prediksi Harga {commodity}", color="white", fontsize=14, pad=20)
-    ax.legend()
-    plt.tight_layout()
-    plt.savefig(path, dpi=150)
+def backtest_model(series, test_days=30, model_type="arima"):
+    """Menguji performa model pada 30 hari terakhir untuk menghitung MAPE."""
+    if len(series) < test_days + 20: return {"mape": 99.9}
+    train, test = series.iloc[:-test_days], series.iloc[-test_days:]
+    try:
+        if model_type == "arima" and HAS_STATSMODELS:
+            from pmdarima import auto_arima
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                order = auto_arima(np.log1p(train), seasonal=False, m=1).order
+                model = SARIMAX(np.log1p(train), order=order).fit(disp=False)
+            fc = np.expm1(model.forecast(steps=test_days))
+        elif model_type == "ets" and HAS_STATSMODELS:
+            # ETS seringkali butuh parameter seasonal jika data harian
+            model = ExponentialSmoothing(train, trend='add', seasonal=None).fit()
+            fc = model.forecast(steps=test_days)
+        elif model_type == "prophet" and HAS_PROPHET:
+            df_p = train.reset_index(); df_p.columns = ['ds', 'y']; df_p['ds'] = df_p['ds'].dt.tz_localize(None)
+            m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True)
+            m.add_country_holidays(country_name='ID'); m.fit(df_p)
+            fc = m.predict(m.make_future_dataframe(periods=test_days, freq='D'))['yhat'].iloc[-test_days:].values
+        elif model_type == "xgboost" and HAS_XGBOOST:
+            fc = predict_xgboost(train, test_days)
+        else: return {"mape": 99.9}
+        
+        fc = fc[:len(test)]
+        mape = np.mean(np.abs((test.values - fc) / test.values)) * 100
+        return {"mape": mape, "forecast": fc}
+    except Exception as e:
+        logger.error(f"❌ Error pada model {model_type}: {e}")
+        return {"mape": 99.9}
+
+def plot_forecast(series, forecast_dates, forecast_values, commodity_name, out_path):
+    """Menyimpan grafik prediksi statis (Opsional)."""
+    plt.figure(figsize=(12, 6))
+    plt.plot(series.index[-60:], series.values[-60:], label="Riwayat (60 Hari)", color="blue", marker='o')
+    plt.plot(forecast_dates, forecast_values, label="Prediksi AI", color="red", linestyle="--", marker='s')
+    plt.title(f"Prediksi Harga: {commodity_name}")
+    plt.xlabel("Tanggal")
+    plt.ylabel("Harga (Rp)")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig(out_path)
     plt.close()
 
-
-# ══════════════════════════════════════════════
-#  MAIN RUNNER
-# ══════════════════════════════════════════════
-
-def run_pipeline(json_path, commodity_name, n_days, out_dir, use_api=True, sim_date=None):
-    os.makedirs(out_dir, exist_ok=True)
-    
-    # 1. Load History Lokal
+def run_pipeline(json_path, commodity_name, n_days=7, out_dir="output", use_api=True):
+    """Orkestrasi utama: Ambil Data -> Kompetisi Model -> Ramalan -> Simpan JSON."""
     df, _ = load_json_data(json_path)
-    
-    # 2. Update dengan API BI PIHPS
     if use_api:
-        df = update_history_with_api(df, json_path, sim_date=sim_date)
+        df = update_history_with_api(df, json_path)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump({"data": df.to_dict(orient="records")}, f, indent=2, ensure_ascii=False)
     
     series = extract_commodity_series(df, commodity_name)
-    series = handle_missing_dates(series)
     
-    # Gunakan seluruh data yang tersedia untuk menangkap tren jangka panjang & musiman
-    # (Tidak lagi memotong data menjadi 90 hari)
+    # Kompetisi 4 Model (Quad-Hybrid)
+    scores = {}
+    for m in ["arima", "ets", "prophet", "xgboost"]:
+        scores[m] = backtest_model(series, test_days=30, model_type=m)["mape"]
     
-    # Model Selection (ARIMA vs ETS vs Prophet)
-    order = find_best_arima_params(series)
-    test_days = 10
-    bt_arima   = backtest_model(series, order, test_days, "arima")
-    bt_ets     = backtest_model(series, order, test_days, "ets")
-    bt_prophet = backtest_model(series, order, test_days, "prophet")
+    best_type = min(scores, key=scores.get)
+    best_mape = scores[best_type]
     
-    # Pilih model dengan MAPE terkecil
-    models_scores = {
-        "arima": bt_arima["mape"],
-        "ets": bt_ets["mape"],
-        "prophet": bt_prophet["mape"]
-    }
-    best_type = min(models_scores, key=models_scores.get)
-    best_bt = {"arima": bt_arima, "ets": bt_ets, "prophet": bt_prophet}[best_type]
+    print(f"   - ARIMA: {scores['arima']:.2f}% | ETS: {scores['ets']:.2f}% | PROPHET: {scores['prophet']:.2f}% | XGB: {scores['xgboost']:.2f}%")
+    print(f"🏆 Pemenang: {best_type.upper()} ({best_mape:.2f}%)")
     
-    # Tampilkan perbandingan skor untuk transparansi
-    print(f"   - ARIMA   MAPE: {bt_arima['mape']:.2f}%")
-    print(f"   - ETS     MAPE: {bt_ets['mape']:.2f}%")
-    print(f"   - PROPHET MAPE: {bt_prophet['mape']:.2f}%")
-    
-    print(f"\n🏆 Model Terpilih: {best_type.upper()}")
-    print(f"📊 Backtest MAPE: {best_bt['mape']:.2f}%")
-    
-    # Final Training (Satu kali saja)
-    final_model, actual_model_type = train_final_model(series, order, best_type)
-    forecast_df = forecast_prices(final_model, series, n_days, actual_model_type)
-    
-    # Output
-    slug = commodity_name.lower().replace(" ", "_")
-    json_path = os.path.join(out_dir, f"forecast_{slug}.json")
-    chart_path = os.path.join(out_dir, f"forecast_{slug}.png")
-    
-    # Simpan JSON dan Gambar
-    save_forecast_to_json(forecast_df, json_path, commodity_name)
-    plot_final(series, forecast_df, commodity_name, chart_path, best_bt)
-    
-    print("\n🔮 Hasil Prediksi:")
-    for _, r in forecast_df.iterrows():
-        print(f"   {r['date']} → Rp {r['predicted_price']:,.0f}")
-        
-    return forecast_df, best_bt['mape']
+    # Final Forecast dengan SEMUA Model untuk Audit
+    all_forecasts = {}
+    forecast_dates = pd.date_range(start=series.index[-1], periods=n_days + 1, freq='D')[1:]
+    forecast_dates_str = [d.strftime("%Y-%m-%d") for d in forecast_dates]
 
-if __name__ == "__main__":
-    # ─── Konfigurasi Test ──────────────────────────────────
-    HISTORY_FILE   = "commodity_history.json"
-    USE_LIVE_API   = True  
-    SIM_DATE       = None 
-    COMMODITY      = "Bawang Merah" 
-    FORECAST_DAYS  = 7
-    OUTPUT_DIR     = "output"
-    # ───────────────────────────────────────────────────────
+    # 1. ARIMA
+    try:
+        from pmdarima import auto_arima
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            order = auto_arima(np.log1p(series), seasonal=False, m=1).order
+            model_arima = SARIMAX(np.log1p(series), order=order).fit(disp=False)
+        fc_arima = np.expm1(model_arima.forecast(steps=n_days))
+        all_forecasts["arima"] = [round(p, 0) for p in fc_arima]
+    except: all_forecasts["arima"] = []
+
+    # 2. ETS
+    try:
+        model_ets = ExponentialSmoothing(series, trend='add').fit()
+        fc_ets = model_ets.forecast(steps=n_days)
+        all_forecasts["ets"] = [round(p, 0) for p in fc_ets]
+    except: all_forecasts["ets"] = []
+
+    # 3. Prophet
+    try:
+        df_p = series.reset_index(); df_p.columns = ['ds', 'y']; df_p['ds'] = df_p['ds'].dt.tz_localize(None)
+        m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True)
+        m.add_country_holidays(country_name='ID'); m.fit(df_p)
+        fc_prophet = m.predict(m.make_future_dataframe(periods=n_days, freq='D'))['yhat'].iloc[-n_days:].values
+        all_forecasts["prophet"] = [round(p, 0) for p in fc_prophet]
+    except: all_forecasts["prophet"] = []
+
+    # 4. XGBoost
+    try:
+        fc_xgb = predict_xgboost(series, n_days)
+        all_forecasts["xgboost"] = [round(p, 0) for p in fc_xgb]
+    except: all_forecasts["xgboost"] = []
+
+    # Hasil untuk Mobile (Tetap pakai yang terbaik berdasarkan MAPE)
+    best_fc = all_forecasts[best_type]
+    forecast_df = pd.DataFrame({
+        "date": forecast_dates_str,
+        "price": best_fc
+    })
     
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    f_df, mape_score = run_pipeline(HISTORY_FILE, COMMODITY, FORECAST_DAYS, OUTPUT_DIR, 
-                                    use_api=USE_LIVE_API, sim_date=SIM_DATE)
-    print(f"\n✅ Test Selesai. MAPE: {mape_score:.2f}%")
+    # Simpan JSON Individual
+    res = {
+        "commodity": commodity_name,
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "model_used": best_type,
+        "mape": round(best_mape, 2),
+        "last_price": float(series.iloc[-1]),
+        "forecast": forecast_df.to_dict(orient="records")
+    }
+    
+    os.makedirs(out_dir, exist_ok=True)
+    out_file = os.path.join(out_dir, f"forecast_{commodity_name.lower().replace(' ', '_')}.json")
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump(res, f, indent=2)
+    
+    # Simpan Grafik
+    plot_path = os.path.join(out_dir, f"chart_{commodity_name.lower().replace(' ', '_')}.png")
+    plot_forecast(series, forecast_dates, best_fc, commodity_name, plot_path)
+    
+    print(f"🔮 Hasil Prediksi ({best_type.upper()}):")
+    for date, price in zip(forecast_dates_str[:3], best_fc[:3]):
+        print(f"   {date} → Rp {price:,}")
+    
+    return forecast_df, best_mape, best_type, scores, all_forecasts
