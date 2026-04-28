@@ -1,4 +1,4 @@
-# 📈 Komoditas-AI Backend System
+# 📈 Sistem Prediksi Harga Komoditas Pangan Nasional berbasis AI (ARIMA/ETS) 
 
 Backend cerdas berbasis Python untuk memprediksi harga komoditas pangan harian di Indonesia. Sistem ini menggabungkan teknik statistik klasik dengan algoritma Machine Learning modern untuk menghasilkan insight pasar yang akurat dan siap saji bagi aplikasi mobile.
 
@@ -108,4 +108,4 @@ Untuk performa UI yang maksimal, gunakan tips berikut:
 - **Integration:** PIHPS API (Bank Indonesia)
 
 ---
-**Maintained by:** Tim Analis Data & AI
+**Maintained by:** RizkyHamdana
