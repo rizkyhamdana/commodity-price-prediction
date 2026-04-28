@@ -2,6 +2,12 @@
 
 Sistem Backend cerdas berbasis Python yang dirancang untuk memprediksi harga komoditas pangan di Indonesia. Sistem ini menggunakan pendekatan **Quad-Hybrid Competition** untuk memastikan akurasi tertinggi setiap harinya.
 
+## 📌 Context & Purpose
+Pasar komoditas pangan di Indonesia sangat fluktuatif, terutama menjelang hari raya besar. Proyek ini dibangun untuk:
+*   **Mengurangi Ketidakpastian:** Memberikan gambaran tren harga 7 hari ke depan bagi pelaku UMKM dan konsumen.
+*   **Akurasi Berbasis Data:** Mengeliminasi spekulasi dengan menggunakan kompetisi algoritma AI yang terus diperbarui.
+*   **Integrasi Mobile:** Menyediakan data siap saji untuk aplikasi mobile guna memantau harga secara *real-time*.
+
 ## 📊 Arsitektur Sistem
 
 ```mermaid
