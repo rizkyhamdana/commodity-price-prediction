@@ -17,6 +17,8 @@ from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from pmdarima import auto_arima
+from prophet import Prophet
+import holidays
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -187,10 +189,20 @@ def backtest_model(series: pd.Series, arima_order: dict, test_days: int, model_t
         model = ARIMA(train_log, order=(arima_order["p"], arima_order["d"], arima_order["q"]), trend=arima_order.get("trend"))
         fitted = model.fit()
         pred = np.expm1(fitted.get_forecast(steps=test_days).predicted_mean)
-    else:
+    elif model_type == "ets":
         model = ExponentialSmoothing(train_log, trend='add', damped_trend=True)
         fitted = model.fit()
         pred = np.expm1(fitted.forecast(steps=test_days))
+    else: # Prophet
+        df_p = train.reset_index()
+        df_p.columns = ['ds', 'y']
+        df_p['ds'] = df_p['ds'].dt.tz_localize(None)
+        m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True)
+        m.add_country_holidays(country_name='ID')
+        m.fit(df_p)
+        future = m.make_future_dataframe(periods=test_days, freq='B')
+        forecast = m.predict(future)
+        pred = pd.Series(forecast['yhat'].tail(test_days).values, index=test.index)
     
     pred.index = test.index
     mape = float((np.abs((test - pred) / test) * 100).mean())
@@ -216,9 +228,17 @@ def train_final_model(series: pd.Series, arima_order: dict, model_type: str):
             logger.warning(f"⚠️ ARIMA Gagal ({e}), beralih ke ETS...")
             model = ExponentialSmoothing(series_log, trend='add', damped_trend=True)
             return model.fit(), "ets"
-    else:
+    elif model_type == "ets":
         model = ExponentialSmoothing(series_log, trend='add', damped_trend=True)
         return model.fit(), "ets"
+    else: # prophet
+        df_p = series.reset_index()
+        df_p.columns = ['ds', 'y']
+        df_p['ds'] = df_p['ds'].dt.tz_localize(None)
+        m = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=True)
+        m.add_country_holidays(country_name='ID')
+        m.fit(df_p)
+        return m, "prophet"
 
 
 def forecast_prices(fitted_model, series: pd.Series, n_days: int, model_type: str):
@@ -227,22 +247,26 @@ def forecast_prices(fitted_model, series: pd.Series, n_days: int, model_type: st
         forecast_res = fitted_model.get_forecast(steps=n_days)
         mean = np.expm1(forecast_res.predicted_mean)
         conf = np.expm1(forecast_res.conf_int())
-    else:
-        # Untuk model ETS atau fallback
+        dates = pd.bdate_range(start=series.index[-1] + pd.Timedelta(days=1), periods=n_days)
+    elif model_type == "ets":
         mean = np.expm1(fitted_model.forecast(steps=n_days))
-        # Estimasi confidence interval sederhana untuk ETS
-        conf = pd.DataFrame({
-            "lower": mean * 0.98, 
-            "upper": mean * 1.02
-        }, index=mean.index)
+        conf = pd.DataFrame({"lower": mean * 0.98, "upper": mean * 1.02}, index=mean.index)
+        dates = pd.bdate_range(start=series.index[-1] + pd.Timedelta(days=1), periods=n_days)
+    else: # prophet
+        future = fitted_model.make_future_dataframe(periods=n_days, freq='B')
+        forecast = fitted_model.predict(future)
+        res = forecast.tail(n_days)
+        mean = pd.Series(res['yhat'].values, index=res['ds'])
+        conf = pd.DataFrame({"lower": res['yhat_lower'].values, "upper": res['yhat_upper'].values}, index=res['ds'])
+        dates = res['ds']
     
-    dates = pd.bdate_range(start=series.index[-1] + pd.Timedelta(days=1), periods=n_days)
     df = pd.DataFrame({
-        "date": dates.strftime("%Y-%m-%d"),
+        "date": dates.dt.strftime("%Y-%m-%d") if hasattr(dates, 'dt') else [d.strftime("%Y-%m-%d") for d in dates],
         "predicted_price": mean.values.round(2),
         "lower_ci": conf.iloc[:, 0].values.round(2),
         "upper_ci": conf.iloc[:, 1].values.round(2)
     })
+    return df
     return df
 
 
@@ -305,23 +329,34 @@ def run_pipeline(json_path, commodity_name, n_days, out_dir, use_api=True, sim_d
     series = extract_commodity_series(df, commodity_name)
     series = handle_missing_dates(series)
     
-    # WINDOWING: Ambil 90 hari terakhir
-    if len(series) > 90:
-        series = series.tail(90)
+    # Gunakan seluruh data yang tersedia untuk menangkap tren jangka panjang & musiman
+    # (Tidak lagi memotong data menjadi 90 hari)
     
-    # Model Selection
+    # Model Selection (ARIMA vs ETS vs Prophet)
     order = find_best_arima_params(series)
     test_days = 10
-    bt_arima = backtest_model(series, order, test_days, "arima")
-    bt_ets   = backtest_model(series, order, test_days, "ets")
+    bt_arima   = backtest_model(series, order, test_days, "arima")
+    bt_ets     = backtest_model(series, order, test_days, "ets")
+    bt_prophet = backtest_model(series, order, test_days, "prophet")
     
-    best_type = "ets" if bt_ets["mape"] < bt_arima["mape"] else "arima"
-    best_bt = bt_ets if best_type == "ets" else bt_arima
+    # Pilih model dengan MAPE terkecil
+    models_scores = {
+        "arima": bt_arima["mape"],
+        "ets": bt_ets["mape"],
+        "prophet": bt_prophet["mape"]
+    }
+    best_type = min(models_scores, key=models_scores.get)
+    best_bt = {"arima": bt_arima, "ets": bt_ets, "prophet": bt_prophet}[best_type]
+    
+    # Tampilkan perbandingan skor untuk transparansi
+    print(f"   - ARIMA   MAPE: {bt_arima['mape']:.2f}%")
+    print(f"   - ETS     MAPE: {bt_ets['mape']:.2f}%")
+    print(f"   - PROPHET MAPE: {bt_prophet['mape']:.2f}%")
     
     print(f"\n🏆 Model Terpilih: {best_type.upper()}")
     print(f"📊 Backtest MAPE: {best_bt['mape']:.2f}%")
     
-    # Final Training
+    # Final Training (Satu kali saja)
     final_model, actual_model_type = train_final_model(series, order, best_type)
     forecast_df = forecast_prices(final_model, series, n_days, actual_model_type)
     

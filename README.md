@@ -1,19 +1,20 @@
-# 📈 Sistem Prediksi Harga Komoditas Pangan Nasional berbasis AI (ARIMA/ETS) 
+# 📈 Komoditas-AI Backend System
 
-Backend cerdas berbasis Python untuk memprediksi harga komoditas pangan harian di Indonesia. Sistem ini menggabungkan teknik statistik klasik dengan algoritma Machine Learning modern untuk menghasilkan insight pasar yang akurat dan siap saji bagi aplikasi mobile.
+Sistem prediksi harga bahan pokok harian yang cerdas, dirancang khusus untuk pasar Indonesia. Backend ini menggabungkan teknik statistik klasik dengan algoritma Machine Learning modern untuk menghasilkan insight pasar yang akurat dan siap saji bagi aplikasi mobile.
 
 ---
 
 ## 🏗 Arsitektur Sistem
 
 1.  **Data Ingestion (`requests`):** Sinkronisasi otomatis dengan API Bank Indonesia (PIHPS).
-2.  **Preprocessing (`pandas`):** Penanganan *missing values*, interpolasi kalender (7 hari seminggu), dan windowing data 90 hari.
-3.  **Hybrid AI Engine (`statsmodels`, `pmdarima`):**
-    *   **ARIMA:** Menangani data dengan tren linear dan musiman yang jelas.
-    *   **ETS (Error, Trend, Seasonal):** Menangani data dengan fluktuasi eksponensial.
-    *   **Selection:** Model dipilih secara dinamis berdasarkan nilai MAPE (Mean Absolute Percentage Error) terendah melalui proses backtesting.
-4.  **Insight Generation:** Mesin NLP sederhana yang mengubah angka menjadi narasi kontekstual.
-5.  **API Layer (`FastAPI`):** Menyajikan data terenkapsulasi dalam format JSON yang dioptimalkan untuk performa mobile.
+2.  **Preprocessing (`pandas`):** Penanganan *missing values*, interpolasi kalender (7 hari seminggu), dan penggunaan data riwayat 1 tahun untuk menangkap tren musiman.
+3.  **Triple-Hybrid AI Engine:**
+    *   **ARIMA:** Unggul pada data dengan tren stabil dan linear.
+    *   **ETS (Exponential Smoothing):** Unggul pada fluktuasi jangka pendek yang dinamis.
+    *   **Facebook Prophet:** Unggul pada pola musiman dan lonjakan hari raya (Holiday Aware).
+    *   **Selection:** Model dipilih secara dinamis berdasarkan nilai MAPE (Mean Absolute Percentage Error) terendah melalui proses backtesting harian.
+4.  **Insight Generation:** Mesin NLP sederhana yang mengubah angka menjadi narasi kontekstual dalam Bahasa Indonesia.
+5.  **API Layer (`FastAPI`):** Menyajikan data terenkapsulasi dalam format JSON yang dioptimalkan untuk performa mobile (30 hari riwayat).
 
 ---
 
@@ -22,7 +23,7 @@ Backend cerdas berbasis Python untuk memprediksi harga komoditas pangan harian d
 | File | Fungsi Utama |
 | :--- | :--- |
 | `run_all.py` | **Orchestrator**. Menjalankan seluruh pipeline dari update data hingga export JSON. |
-| `commodity_forecaster.py` | **Core AI**. Berisi logika matematika, pencarian parameter, dan evaluasi model. |
+| `commodity_forecaster.py` | **Core AI**. Berisi logika matematika, pencarian parameter, dan evaluasi model hibrida. |
 | `api_server.py` | **Interface**. Server REST API yang melayani data ke client (Flutter). |
 | `commodity_history.json` | **Database**. Penyimpanan lokal data historis harga (Central Source of Truth). |
 | `output/` | Folder hasil pemrosesan (Grafik .png & JSON per komoditas). |
@@ -33,7 +34,7 @@ Backend cerdas berbasis Python untuk memprediksi harga komoditas pangan harian d
 
 ### 1. Persiapan Lingkungan
 ```bash
-pip install pandas numpy statsmodels pmdarima requests fastapi uvicorn matplotlib
+pip3 install pandas numpy statsmodels pmdarima requests fastapi uvicorn matplotlib prophet holidays
 ```
 
 ### 2. Update Data & Prediksi Harian
@@ -41,13 +42,12 @@ Jalankan perintah ini untuk melakukan sinkronisasi data terbaru dan menghitung r
 ```bash
 python3 run_all.py
 ```
-*Tip: Disarankan untuk dijalankan via Cron Job setiap pukul 10:00 WIB setelah data pasar dirilis.*
+*Tip: Disarankan untuk dijalankan via Cron Job setiap hari setelah data pasar dirilis.*
 
 ### 3. Menjalankan Server API
 ```bash
 python3 api_server.py
 ```
-Akses di browser: `http://localhost:8000/api/commodities`
 
 ---
 
@@ -71,11 +71,13 @@ Mendapatkan seluruh data komoditas beserta prediksi dan wawasan pasar.
         "day_1": 9.72,
         "day_7": 9.72
       },
+      "forecast_pct": 0.0,
+      "trend": "STABIL ➡️",
       "reliability": "SANGAT TINGGI",
       "market_alert": "🚨 Lonjakan harga tajam hari ini!",
       "insight": "🚨 Lonjakan harga tajam hari ini! Namun ke depannya...",
       "chart": {
-        "history": [ { "date": "2026-01-28", "price": 15750 }, ... ],
+        "history": [ { "date": "2026-04-01", "price": 17000 }, ... ],
         "forecast": [ { "date": "2026-04-28", "price": 17500 }, ... ]
       }
     }
@@ -87,25 +89,22 @@ Mendapatkan seluruh data komoditas beserta prediksi dan wawasan pasar.
 
 ## 📱 Panduan Integrasi Flutter
 
-Untuk performa UI yang maksimal, gunakan tips berikut:
-
-1.  **Line Chart (`fl_chart`):**
-    *   Gunakan `history` sebagai data utama (garis solid).
-    *   Gunakan `forecast` sebagai data prediksi (garis putus-putus).
-    *   *Catatan:* Titik terakhir history dan titik pertama forecast adalah sama (seamless connection).
-2.  **Color Coding:**
-    *   Gunakan warna **Hijau** jika `trend` mengandung kata "TURUN" (Berita baik bagi konsumen).
-    *   Gunakan warna **Merah** jika `trend` mengandung kata "NAIK" (Waspada bagi konsumen).
-3.  **Market Alerts:**
-    *   Tampilkan widget `Banner` atau `Card` khusus jika `market_alert` tidak kosong untuk menarik perhatian user.
+1.  **Dual-Window Chart:**
+    *   Tampilkan **30 hari history** (garis solid) untuk memberikan konteks jangka pendek.
+    *   Tampilkan **7 hari forecast** (garis putus-putus) untuk melihat arah harga masa depan.
+2.  **Indikator Keandalan:**
+    *   Gunakan field `reliability` untuk memberi tahu user seberapa akurat prediksi tersebut (SANGAT TINGGI = MAPE < 1.5%).
+3.  **Color Coding:**
+    *   Warna **Hijau** untuk tren "TURUN" (kabar baik).
+    *   Warna **Merah** untuk tren "NAIK" (waspada).
 
 ---
 
 ## 🛠 Tech Stack
 - **Language:** Python 3.14+
-- **Data Science:** Pandas, Statsmodels, Pmdarima
+- **Data Science:** Pandas, Statsmodels, Pmdarima, Prophet
 - **Web Framework:** FastAPI, Uvicorn
-- **Integration:** PIHPS API (Bank Indonesia)
+- **Integration:** PIHPS API (Bank Indonesia) & Holidays (ID)
 
 ---
-**Maintained by:** RizkyHamdana
+**Maintained by:** Tim Analis Data & AI

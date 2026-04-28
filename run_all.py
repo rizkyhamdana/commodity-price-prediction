@@ -158,8 +158,8 @@ def run_all_predictions():
 
             # 4. Prepare Chart Data (Flutter Friendly)
             history_points = []
-            # Kirim semua 90 hari agar Flutter bisa filter sendiri (7D, 30D, 90D)
-            for d, v in series_hist.items():
+            # Kirim hanya 30 hari terakhir untuk efisiensi Mobile (1D, 7D, 30D)
+            for d, v in series_hist.tail(30).items():
                 d_obj = datetime.strptime(d, "%d/%m/%Y")
                 history_points.append({
                     "date": d_obj.strftime("%Y-%m-%d"),
