@@ -338,21 +338,19 @@ def run_pipeline(json_path, commodity_name, n_days, out_dir, use_api=True, sim_d
     for _, r in forecast_df.iterrows():
         print(f"   {r['date']} → Rp {r['predicted_price']:,.0f}")
         
-    return forecast_df
+    return forecast_df, best_bt['mape']
 
 if __name__ == "__main__":
-    # ─── Konfigurasi ───────────────────────────────────────
-    HISTORY_FILE   = "Data lengkap Komoditas 6 Bulan.json"
+    # ─── Konfigurasi Test ──────────────────────────────────
+    HISTORY_FILE   = "commodity_history.json"
     USE_LIVE_API   = True  
-    
-    # Masukkan tanggal (YYYY-MM-DD) untuk simulasi update
-    # Set ke None untuk mode normal (tanggal hari ini)
     SIM_DATE       = None 
-    
-    COMMODITY      = "Cabai Rawit" 
+    COMMODITY      = "Bawang Merah" 
     FORECAST_DAYS  = 7
     OUTPUT_DIR     = "output"
     # ───────────────────────────────────────────────────────
     
-    run_pipeline(HISTORY_FILE, COMMODITY, FORECAST_DAYS, OUTPUT_DIR, 
-                 use_api=USE_LIVE_API, sim_date=SIM_DATE)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    f_df, mape_score = run_pipeline(HISTORY_FILE, COMMODITY, FORECAST_DAYS, OUTPUT_DIR, 
+                                    use_api=USE_LIVE_API, sim_date=SIM_DATE)
+    print(f"\n✅ Test Selesai. MAPE: {mape_score:.2f}%")

@@ -2,12 +2,12 @@ import json
 import os
 import logging
 from datetime import datetime, timedelta
-from commodity_arima_pipeline import run_pipeline, load_json_data, extract_commodity_series
+from commodity_forecaster import run_pipeline, load_json_data, extract_commodity_series
 
 # ──────────────────────────────────────────────
 #  Konfigurasi Global
 # ──────────────────────────────────────────────
-HISTORY_FILE   = "Data lengkap Komoditas 6 Bulan.json"
+HISTORY_FILE   = "commodity_history.json"
 OUTPUT_DIR     = "output"
 FORECAST_DAYS  = 7
 USE_LIVE_API   = True  
@@ -29,41 +29,49 @@ COMMODITIES = [
     "Gula Pasir"
 ]
 
-def generate_commodity_insight(commodity, trend, pct_change):
-    """Memberikan catatan otomatis berdasarkan tren."""
-    disclaimer = "Catatan: Prediksi berbasis data historis, faktor eksternal (cuaca, regulasi, hari raya) tetap berpengaruh."
-    
-    if "NAIK" in trend:
-        msg = f"Tren {commodity} cenderung meningkat ({pct_change}%). Disarankan untuk mengamankan stok jika kebutuhan mendesak."
-    elif "TURUN" in trend:
-        msg = f"Tren {commodity} sedang menurun ({pct_change}%). Peluang baik untuk pengadaan, namun pantau kualitas stok."
+def generate_commodity_insight(name, trend, forecast_pct, alert):
+    # Logika Gabungan Alert + Trend
+    if alert and "TURUN" in trend:
+        msg = f"{alert} Berita baiknya, setelah lonjakan ini harga {name} diprediksi akan segera melandai turun sekitar {abs(forecast_pct)}%."
+    elif alert and "NAIK" in trend:
+        msg = f"Waspada! {alert} dan diprediksi harga {name} masih akan terus merangkak naik sekitar {abs(forecast_pct)}%."
+    elif alert:
+        msg = f"{alert} Namun ke depannya, harga {name} diprediksi akan stabil di level baru ini."
     else:
-        msg = f"Tren {commodity} relatif stabil. Pantau pergerakan harga harian untuk perubahan mendadak."
-        
-    return f"{msg} {disclaimer}"
+        # Kondisi Normal (Tanpa Alert Hari Ini)
+        if "NAIK" in trend:
+            msg = f"Tren {name} terpantau naik. Prediksi menunjukkan kenaikan sekitar {abs(forecast_pct)}% minggu depan."
+        elif "TURUN" in trend:
+            msg = f"Tren {name} sedang menurun. Harga diprediksi turun sekitar {abs(forecast_pct)}%."
+        else:
+            msg = f"Harga {name} terpantau stabil dan diperkirakan tidak banyak berubah dalam waktu dekat."
+
+    msg += "\n\nSelalu pantau harga harian, karena faktor pasar sangat dinamis."
+    return msg
 
 def generate_global_insight(summary_data):
     """Memberikan analisis pasar secara keseluruhan."""
     naik = [i['name'] for i in summary_data if "NAIK" in i['trend']]
     turun = [i['name'] for i in summary_data if "TURUN" in i['trend']]
     
-    analysis = "Pasar hari ini secara umum stabil. "
+    # Logika pembuka dinamis
+    if len(naik) > 3:
+        msg = "Pasar sedang mengalami tren kenaikan harga di beberapa sektor utama. "
+    elif len(turun) > 3:
+        msg = "Pasar menunjukkan tren penurunan harga yang cukup luas hari ini. "
+    elif len(naik) > 0 or len(turun) > 0:
+        msg = "Terdapat fluktuasi harga pada beberapa komoditas, namun pasar secara umum masih terkendali. "
+    else:
+        msg = "Pasar hari ini terpantau sangat stabil tanpa perubahan harga signifikan. "
+
     if naik:
-        analysis += f"Waspadai kenaikan harga pada {', '.join(naik)}. "
+        msg += f"Waspadai kenaikan pada {', '.join(naik)}. "
     if turun:
-        analysis += f"Terdapat penurunan harga yang signifikan pada {', '.join(turun)}, terutama komoditas hortikultura. "
-        
-    analysis += "Gunakan prediksi ini sebagai referensi pendukung, bukan satu-satunya dasar keputusan."
-    return analysis
-
-def run_all_predictions():
-    print("\n" + "═" * 60)
-    print(" 🚀 STARTING GLOBAL COMMODITY FORECAST PIPELINE")
-    print(" 📅 Running all commodities in sequence...")
-    print("═" * 60 + "\n")
-
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+        msg += f"Potensi penghematan pada {', '.join(turun)}. "
     
+    msg += "\nGunakan prediksi ini sebagai referensi pendukung, masih banyak faktor eksternal yang bisa mempengaruhi harga."
+    return msg
+
 def run_all_predictions():
     print("\n" + "═" * 60)
     print(" 🚀 STARTING MOBILE BACKEND GENERATOR")
@@ -84,7 +92,7 @@ def run_all_predictions():
             api_status = USE_LIVE_API if i == 1 else False
             
             # 1. Run Forecast
-            forecast_df = run_pipeline(
+            forecast_df, mape = run_pipeline(
                 json_path=HISTORY_FILE,
                 commodity_name=commodity,
                 n_days=FORECAST_DAYS,
@@ -92,9 +100,30 @@ def run_all_predictions():
                 use_api=api_status
             )
             
-            # 2. Get Historical Series for Chart
+            # 2. Get Historical Series for Chart & Current Price
+            date_cols = [c for c in df_full.columns if "/" in c]
+            
+            # Buat rentang tanggal lengkap (termasuk Sabtu-Minggu) untuk 90 hari terakhir
+            end_dt = datetime.strptime(max(date_cols, key=lambda x: datetime.strptime(x, "%d/%m/%Y")), "%d/%m/%Y")
+            start_dt = end_dt - timedelta(days=90)
+            
+            # Buat list tanggal harian (Daily)
+            full_date_range = []
+            curr = start_dt
+            while curr <= end_dt:
+                full_date_range.append(curr.strftime("%d/%m/%Y"))
+                curr += timedelta(days=1)
+            
             series_hist = extract_commodity_series(df_full, commodity)
+            # Reindex dengan kalender lengkap agar grafik linear di Flutter
+            series_hist = series_hist.reindex(full_date_range)
+            
+            # ISI DATA KOSONG (NaN) dengan harga sebelumnya agar grafik menyambung
+            series_hist = series_hist.ffill().bfill()
+            
             last_actual = float(series_hist.iloc[-1])
+            last_date = series_hist.index[-1]
+            print(f"📊 Harga terakhir ({last_date}): Rp {last_actual:,.0f}")
             
             # 3. Find Sub-Commodities (Level 2)
             sub_items = []
@@ -128,23 +157,83 @@ def run_all_predictions():
                     })
 
             # 4. Prepare Chart Data (Flutter Friendly)
-            history_points = [{"date": d.strftime("%Y-%m-%d"), "price": float(v)} for d, v in series_hist.tail(30).items()]
-            forecast_points = [{"date": r["date"], "price": r["predicted_price"]} for _, r in forecast_df.iterrows()]
+            history_points = []
+            # Kirim semua 90 hari agar Flutter bisa filter sendiri (7D, 30D, 90D)
+            for d, v in series_hist.items():
+                d_obj = datetime.strptime(d, "%d/%m/%Y")
+                history_points.append({
+                    "date": d_obj.strftime("%Y-%m-%d"),
+                    "price": float(v)
+                })
+            
+            # Forecast diawali dengan harga terakhir hari ini agar "Tersambung" di grafik
+            forecast_points = [{
+                "date": datetime.strptime(last_date, "%d/%m/%Y").strftime("%Y-%m-%d"),
+                "price": int(round(last_actual))
+            }]
+            # Tambahkan hasil prediksi besok dan seterusnya (Bulatkan ke Rupiah)
+            for _, r in forecast_df.iterrows():
+                forecast_points.append({
+                    "date": r["date"],
+                    "price": int(round(r["predicted_price"]))
+                })
 
             # 5. Build Object
+            # Hitung Perubahan Berbagai Rentang Waktu
+            def get_pct_change(series, days_back):
+                if len(series) > days_back:
+                    current = float(series.iloc[-1])
+                    past = float(series.iloc[-(days_back + 1)])
+                    return round(((current - past) / past) * 100, 2)
+                return 0.0
+
+            changes = {
+                "day_1": get_pct_change(series_hist, 1),
+                "day_7": get_pct_change(series_hist, 7),
+                "day_30": get_pct_change(series_hist, 30)
+            }
+
+            # Prediksi untuk penentuan Trend Masa Depan
             pred_end = float(forecast_df["predicted_price"].iloc[-1])
-            pct_change = ((pred_end - last_actual) / last_actual) * 100
-            trend = "NAIK 📈" if pct_change > 0.5 else ("TURUN 📉" if pct_change < -0.5 else "STABIL ➡️")
+            forecast_change_pct = round(((pred_end - last_actual) / last_actual) * 100, 2)
+            if forecast_change_pct == -0.0: forecast_change_pct = 0.0
+
+            # Tingkat Keandalan (Reliability) berdasarkan MAPE
+            if mape < 1.5:
+                reliability = "SANGAT TINGGI"
+            elif mape < 3.0:
+                reliability = "TINGGI"
+            else:
+                reliability = "CUKUP"
+            
+            # Trend murni untuk Masa Depan (Ramalan)
+            if forecast_change_pct > 0.5:
+                trend = "NAIK 📈"
+            elif forecast_change_pct < -0.5:
+                trend = "TURUN 📉"
+            else:
+                trend = "STABIL ➡️"
+
+            # Alert untuk Lonjakan/Penurunan Tajam HARI INI
+            daily_pct = changes["day_1"]
+            market_alert = None
+            if daily_pct > 3.0:
+                market_alert = "🚨 Lonjakan harga tajam hari ini!"
+            elif daily_pct < -3.0:
+                market_alert = "✅ Penurunan harga signifikan hari ini!"
             
             slug = commodity.lower().replace(" ", "_")
 
             item_data = {
                 "name": commodity,
                 "current_price": last_actual,
-                "pct_change": round(pct_change, 2),
+                "price_changes": changes,
+                "forecast_pct": forecast_change_pct,
                 "trend": trend,
+                "reliability": reliability,
+                "market_alert": market_alert,
                 "image_asset": f"assets/images/{slug}.png",
-                "insight": generate_commodity_insight(commodity, trend, round(pct_change, 2)),
+                "insight": generate_commodity_insight(commodity, trend, round(forecast_change_pct, 2), market_alert),
                 "chart": {
                     "history": history_points,
                     "forecast": forecast_points

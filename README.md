@@ -1,76 +1,111 @@
-# 📈 Commodity Price Forecast System (ARIMA + FastAPI)
+# 📈 Komoditas-AI Backend System
 
-Sistem prediksi harga komoditas pangan nasional berbasis Machine Learning yang terintegrasi dengan API Bank Indonesia (PIHPS) dan siap digunakan sebagai backend untuk aplikasi mobile Flutter.
+Backend cerdas berbasis Python untuk memprediksi harga komoditas pangan harian di Indonesia. Sistem ini menggabungkan teknik statistik klasik dengan algoritma Machine Learning modern untuk menghasilkan insight pasar yang akurat dan siap saji bagi aplikasi mobile.
 
-## 🚀 Fitur Utama
-- **Hybrid Data Engine**: Sinkronisasi otomatis data historis lokal dengan API Live PIHPS Bank Indonesia.
-- **Auto-Model Selection**: Memilih model terbaik antara **ARIMA** dan **ETS (Exponential Smoothing)** secara otomatis berdasarkan nilai MAPE terkecil (backtesting).
-- **Mobile-Ready Backend**: Menghasilkan output JSON terstruktur yang berisi:
-  - Data grafik (History 30 hari + Forecast 7 hari).
-  - Mapping Sub-komoditas (Level 2).
-  - Persentase perubahan harga harian.
-  - Insight otomatis berbasis AI.
-- **REST API**: Dibangun menggunakan **FastAPI** untuk melayani permintaan data dari aplikasi Flutter dengan performa tinggi.
+---
 
-## 🛠️ Tech Stack
-- **Language**: Python 3.14+
-- **Machine Learning**: `statsmodels`, `pmdarima`, `pandas`, `numpy`
-- **Backend API**: `FastAPI`, `Uvicorn`
-- **Automation**: `Crontab` (Linux)
+## 🏗 Arsitektur Sistem
 
-## 📂 Struktur Proyek
-```text
-├── run_all.py                 # Orchestrator (Data Fetcher + Forecaster)
-├── api_server.py              # FastAPI Server untuk Flutter
-├── commodity_arima_pipeline.py # Core Logic ML & API BI
-├── Data lengkap...json        # Database historis lokal
-├── output/                    # Folder hasil generate (JSON & PNG)
-│   └── mobile_backend.json    # Endpoint data utama untuk Flutter
-└── requirements.txt           # Daftar library dependencies
-```
+1.  **Data Ingestion (`requests`):** Sinkronisasi otomatis dengan API Bank Indonesia (PIHPS).
+2.  **Preprocessing (`pandas`):** Penanganan *missing values*, interpolasi kalender (7 hari seminggu), dan windowing data 90 hari.
+3.  **Hybrid AI Engine (`statsmodels`, `pmdarima`):**
+    *   **ARIMA:** Menangani data dengan tren linear dan musiman yang jelas.
+    *   **ETS (Error, Trend, Seasonal):** Menangani data dengan fluktuasi eksponensial.
+    *   **Selection:** Model dipilih secara dinamis berdasarkan nilai MAPE (Mean Absolute Percentage Error) terendah melalui proses backtesting.
+4.  **Insight Generation:** Mesin NLP sederhana yang mengubah angka menjadi narasi kontekstual.
+5.  **API Layer (`FastAPI`):** Menyajikan data terenkapsulasi dalam format JSON yang dioptimalkan untuk performa mobile.
 
-## ⚙️ Instalasi & Penggunaan
+---
+
+## 📂 Struktur Proyek & Tanggung Jawab
+
+| File | Fungsi Utama |
+| :--- | :--- |
+| `run_all.py` | **Orchestrator**. Menjalankan seluruh pipeline dari update data hingga export JSON. |
+| `commodity_forecaster.py` | **Core AI**. Berisi logika matematika, pencarian parameter, dan evaluasi model. |
+| `api_server.py` | **Interface**. Server REST API yang melayani data ke client (Flutter). |
+| `commodity_history.json` | **Database**. Penyimpanan lokal data historis harga (Central Source of Truth). |
+| `output/` | Folder hasil pemrosesan (Grafik .png & JSON per komoditas). |
+
+---
+
+## 🚀 Panduan Instalasi & Pengoperasian
 
 ### 1. Persiapan Lingkungan
 ```bash
-# Clone repository
-git clone <url-repo-anda>
-cd commodity-price-prediction
-
-# Install library
-python3 -m pip install -r requirements.txt
+pip install pandas numpy statsmodels pmdarima requests fastapi uvicorn matplotlib
 ```
 
-### 2. Menjalankan Generator Data
-Script ini akan menarik data terbaru dari BI, menghitung prediksi, dan menyimpan hasilnya ke `output/mobile_backend.json`.
+### 2. Update Data & Prediksi Harian
+Jalankan perintah ini untuk melakukan sinkronisasi data terbaru dan menghitung ramalan 7 hari ke depan:
 ```bash
 python3 run_all.py
 ```
+*Tip: Disarankan untuk dijalankan via Cron Job setiap pukul 10:00 WIB setelah data pasar dirilis.*
 
-### 3. Menjalankan API Server
-Jalankan server untuk melayani data ke aplikasi Flutter.
+### 3. Menjalankan Server API
 ```bash
 python3 api_server.py
 ```
-Akses di browser: `http://localhost:8000/api/market-summary`
-
-## ☁️ Deployment (Server Linux/VPS)
-
-### Menjalankan API di Background (PM2)
-```bash
-pm2 start api_server.py --interpreter python3 --name "commodity-api"
-```
-
-### Penjadwalan Update Data (Cron)
-Gunakan `crontab -e` untuk menjalankan prediksi setiap jam 5 sore (Senin-Jumat):
-```bash
-0 17 * * 1-5 cd /path/ke/project && /usr/bin/python3 run_all.py >> cron.log 2>&1
-```
-
-## 📝 Catatan untuk Developer Flutter
-- **Endpoint**: `GET /api/market-summary`
-- **Chart Data**: Gunakan field `chart.history` (biru) dan `chart.forecast` (kuning/putus-putus) untuk library `fl_chart`.
-- **Assets**: Map field `image_asset` dengan folder `assets/images/` di project Flutter Anda.
+Akses di browser: `http://localhost:8000/api/commodities`
 
 ---
-**Disclaimer**: Prediksi harga ini didasarkan pada data historis. Faktor eksternal seperti cuaca, kebijakan pemerintah, dan hari raya dapat mempengaruhi harga aktual di pasar.
+
+## 📡 Dokumentasi API (Endpoints)
+
+### `GET /api/commodities`
+Mendapatkan seluruh data komoditas beserta prediksi dan wawasan pasar.
+
+**Contoh Response Structure:**
+```json
+{
+  "metadata": {
+    "updated_at": "2026-04-28 11:33:17",
+    "global_analysis": "Pasar menunjukkan tren penurunan..."
+  },
+  "commodities": [
+    {
+      "name": "Beras",
+      "current_price": 17500,
+      "price_changes": {
+        "day_1": 9.72,
+        "day_7": 9.72
+      },
+      "reliability": "SANGAT TINGGI",
+      "market_alert": "🚨 Lonjakan harga tajam hari ini!",
+      "insight": "🚨 Lonjakan harga tajam hari ini! Namun ke depannya...",
+      "chart": {
+        "history": [ { "date": "2026-01-28", "price": 15750 }, ... ],
+        "forecast": [ { "date": "2026-04-28", "price": 17500 }, ... ]
+      }
+    }
+  ]
+}
+```
+
+---
+
+## 📱 Panduan Integrasi Flutter
+
+Untuk performa UI yang maksimal, gunakan tips berikut:
+
+1.  **Line Chart (`fl_chart`):**
+    *   Gunakan `history` sebagai data utama (garis solid).
+    *   Gunakan `forecast` sebagai data prediksi (garis putus-putus).
+    *   *Catatan:* Titik terakhir history dan titik pertama forecast adalah sama (seamless connection).
+2.  **Color Coding:**
+    *   Gunakan warna **Hijau** jika `trend` mengandung kata "TURUN" (Berita baik bagi konsumen).
+    *   Gunakan warna **Merah** jika `trend` mengandung kata "NAIK" (Waspada bagi konsumen).
+3.  **Market Alerts:**
+    *   Tampilkan widget `Banner` atau `Card` khusus jika `market_alert` tidak kosong untuk menarik perhatian user.
+
+---
+
+## 🛠 Tech Stack
+- **Language:** Python 3.14+
+- **Data Science:** Pandas, Statsmodels, Pmdarima
+- **Web Framework:** FastAPI, Uvicorn
+- **Integration:** PIHPS API (Bank Indonesia)
+
+---
+**Maintained by:** Tim Analis Data & AI
