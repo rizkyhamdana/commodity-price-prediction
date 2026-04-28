@@ -35,7 +35,7 @@ def generate_commodity_insight(name, trend, forecast_pct, alert):
         # Jika ada lonjakan/penurunan tajam HARI INI
         if "Penurunan" in alert:
             if forecast_pct > 0.5:
-                msg = f"Meskipun hari ini {alert.lower().replace('!', '')}, namun tetap waspada karena diprediksi harga {name} akan mulai merangkak naik kembali sekitar {forecast_pct}% minggu depan."
+                msg = f"Meskipun {alert.lower().replace('!', '')}, namun tetap waspada karena diprediksi harga {name} akan mulai merangkak naik kembali sekitar {forecast_pct}% minggu depan."
             else:
                 msg = f"{alert} Ini saat yang tepat untuk stok barang, karena tren ke depan diprediksi masih akan melandai turun."
         elif "Lonjakan" in alert:
@@ -245,7 +245,7 @@ def run_all_predictions():
             if daily_pct > 3.0:
                 market_alert = "🚨 Lonjakan harga tajam hari ini!"
             elif daily_pct < -3.0:
-                market_alert = "✅ Penurunan harga signifikan hari ini!"
+                market_alert = "Penurunan harga signifikan hari ini!"
             
             slug = commodity.lower().replace(" ", "_")
 
@@ -298,7 +298,7 @@ def run_all_predictions():
                 "app_name": "Komoditas-AI",
                 "version": "1.0.0",
                 "developer": "Rizky Hamdana",
-                "description": "Sistem prediksi harga bahan pokok menggunakan AI dan Machine Learning (ARIMA/ETS/PROPHET)."
+                "description": "Sistem prediksi harga bahan pokok menggunakan AI dan Machine Learning (ARIMA/ETS/PROPHET/XGBOOST)."
             }
         },
         "commodities": mobile_data
