@@ -107,4 +107,4 @@ Mendapatkan seluruh data komoditas beserta prediksi dan wawasan pasar.
 - **Integration:** PIHPS API (Bank Indonesia) & Holidays (ID)
 
 ---
-**Maintained by:** Tim Analis Data & AI
+**Maintained by:** Rizky Hamdana

@@ -84,6 +84,20 @@ def run_all_predictions():
     success_count = 0
     fail_count = 0
     mobile_data = []
+    
+    # Mapping Satuan Komoditas
+    commodity_units = {
+        "Beras": "kg",
+        "Daging Ayam": "kg",
+        "Daging Sapi": "kg",
+        "Telur Ayam": "kg",
+        "Bawang Merah": "kg",
+        "Bawang Putih": "kg",
+        "Cabai Merah": "kg",
+        "Cabai Rawit": "kg",
+        "Minyak Goreng": "lt",
+        "Gula Pasir": "kg"
+    }
 
     for i, commodity in enumerate(COMMODITIES, 1):
         print(f"\n[{i}/{len(COMMODITIES)}] PROCESSING: {commodity.upper()}")
@@ -227,6 +241,7 @@ def run_all_predictions():
             item_data = {
                 "name": commodity,
                 "current_price": last_actual,
+                "unit": commodity_units.get(commodity, "kg"),
                 "price_changes": changes,
                 "forecast_pct": forecast_change_pct,
                 "trend": trend,
@@ -255,8 +270,8 @@ def run_all_predictions():
             "about_us": {
                 "app_name": "Komoditas-AI",
                 "version": "1.0.0",
-                "developer": "Tim Analis Data",
-                "description": "Sistem prediksi harga bahan pokok menggunakan AI dan Machine Learning (ARIMA/ETS)."
+                "developer": "Rizky Hamdana",
+                "description": "Sistem prediksi harga bahan pokok menggunakan AI dan Machine Learning (ARIMA/ETS/PROPHET)."
             }
         },
         "commodities": mobile_data
