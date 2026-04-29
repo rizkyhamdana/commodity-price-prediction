@@ -173,10 +173,12 @@ def prepare_ml_features(series):
 
 def predict_xgboost(series, n_days):
     """Prediksi menggunakan XGBoost dengan strategi rekursif."""
-    if not HAS_XGBOOST: return np.array([series.iloc[-1]] * n_days)
+    if not HAS_XGBOOST: 
+        raise ValueError("XGBoost tidak terinstall")
     
     df_feat = prepare_ml_features(series)
-    if len(df_feat) < 20: return np.array([series.iloc[-1]] * n_days)
+    if len(df_feat) < 20: 
+        raise ValueError("Data terlalu sedikit untuk dilatih dengan XGBoost (butuh min 20)")
     
     feat_cols = ['day_of_week', 'month', 'day_of_month', 'lag_1', 'lag_7', 'lag_14', 'rolling_mean_7', 'rolling_std_7']
     X = df_feat[feat_cols]
@@ -266,8 +268,14 @@ def run_pipeline(json_path, commodity_name, n_days=7, out_dir="output", use_api=
     for m in ["arima", "ets", "prophet", "xgboost"]:
         scores[m] = backtest_model(series, test_days=30, model_type=m)["mape"]
     
-    best_type = min(scores, key=scores.get)
-    best_mape = scores[best_type]
+    valid_scores = {k: v for k, v in scores.items() if v < 99.0}
+    if not valid_scores:
+        logger.warning(f"⚠️ Semua model gagal untuk {commodity_name}. Menggunakan fallback.")
+        best_type = "ets"
+        best_mape = 99.9
+    else:
+        best_type = min(valid_scores, key=valid_scores.get)
+        best_mape = valid_scores[best_type]
     
     print(f"   - ARIMA: {scores['arima']:.2f}% | ETS: {scores['ets']:.2f}% | PROPHET: {scores['prophet']:.2f}% | XGB: {scores['xgboost']:.2f}%")
     print(f"🏆 Pemenang: {best_type.upper()} ({best_mape:.2f}%)")

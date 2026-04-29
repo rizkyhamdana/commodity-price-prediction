@@ -44,7 +44,7 @@ Sistem menghasilkan file audit di folder `archive/` setiap hari. File ini menyim
 
 ### 4. Output Teroptimasi untuk Mobile
 File `mobile_backend.json` menyediakan data yang siap pakai tanpa perlu pemrosesan berat di sisi Flutter:
-*   Analisis narasi otomatis (Human-like Insight).
+*   **Analisis Narasi Dinamis (Generative AI):** Menggunakan integrasi OpenAI/Gemini untuk merangkum pergerakan harga komoditas menjadi insight yang unik, enak dibaca (human-like), dan bervariasi setiap harinya.
 *   Data grafik yang sudah di-sampling (History 30 hari + Forecast 7 hari).
 *   Indikator keandalan (Reliability) berdasarkan skor MAPE.
 
@@ -63,7 +63,12 @@ File `mobile_backend.json` menyediakan data yang siap pakai tanpa perlu pemroses
     ```bash
     pip install -r requirements.txt
     ```
-2.  **Menjalankan Pipeline:**
+2.  **Konfigurasi Environment (Opsional untuk Insight AI):**
+    Buat file `.env` di direktori proyek dan masukkan kredensial API Anda (Sistem otomatis membaca file ini menggunakan `python-dotenv`):
+    ```env
+    OPENAI_API_KEY=sk-proj-YOUR_API_KEY
+    ```
+3.  **Menjalankan Pipeline:**
     ```bash
     python3 run_all.py
     ```

@@ -7,3 +7,6 @@ xgboost
 matplotlib
 holidays
 requests
+openai
+google-genai
+python-dotenv

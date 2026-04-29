@@ -28,6 +28,7 @@ output/
 archive/
 *.log
 .DS_Store
+.env
 
 # IDE
 .vscode/

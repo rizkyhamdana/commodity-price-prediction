@@ -2,7 +2,23 @@ import json
 import os
 import logging
 from datetime import datetime, timedelta
-from commodity_forecaster import run_pipeline, load_json_data, extract_commodity_series
+from commodity_forecaster import run_pipeline, load_json_data, extract_commodity_series, update_history_with_api
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Muat .env file jika ada
+load_dotenv()
+
+# ──────────────────────────────────────────────
+#  Setup LLM (OpenAI)
+# ──────────────────────────────────────────────
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+openai_client = None
+if OPENAI_API_KEY:
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        print(f"⚠️ Gagal setup LLM Client: {e}")
 
 # ──────────────────────────────────────────────
 #  Konfigurasi Global
@@ -31,54 +47,99 @@ COMMODITIES = [
 
 def generate_commodity_insight(name, trend, forecast_pct, alert):
     """Menghasilkan kalimat analisis yang manusiawi dan tidak kontradiktif."""
+    fallback_msg = ""
     if alert:
-        # Jika ada lonjakan/penurunan tajam HARI INI
         if "Penurunan" in alert:
             if forecast_pct > 0.5:
-                msg = f"Meskipun {alert.lower().replace('!', '')}, namun tetap waspada karena diprediksi harga {name} akan mulai merangkak naik kembali sekitar {forecast_pct}% minggu depan."
+                fallback_msg = f"Meskipun {alert.lower().replace('!', '')}, namun tetap waspada karena diprediksi harga {name} akan mulai merangkak naik kembali sekitar {forecast_pct}% minggu depan."
             else:
-                msg = f"{alert} Ini saat yang tepat untuk stok barang, karena tren ke depan diprediksi masih akan melandai turun."
+                fallback_msg = f"{alert} Ini saat yang tepat untuk stok barang, karena tren ke depan diprediksi masih akan melandai turun."
         elif "Lonjakan" in alert:
             if forecast_pct < -0.5:
-                msg = f"{alert} Namun kabar baiknya, harga {name} diprediksi tidak akan lama tinggi dan segera melandai turun sekitar {abs(forecast_pct)}%."
+                fallback_msg = f"{alert} Namun kabar baiknya, harga {name} diprediksi tidak akan lama tinggi dan segera melandai turun sekitar {abs(forecast_pct)}%."
             else:
-                msg = f"{alert} Harap antisipasi pengeluaran lebih, karena tren menunjukkan harga {name} masih berpotensi naik."
+                fallback_msg = f"{alert} Harap antisipasi pengeluaran lebih, karena tren menunjukkan harga {name} masih berpotensi naik."
         else:
-            msg = f"{alert} Tetap pantau perkembangan harga {name} setiap hari."
+            fallback_msg = f"{alert} Tetap pantau perkembangan harga {name} setiap hari."
     else:
-        # Kondisi harga relatif stabil hari ini
         if "NAIK" in trend:
-            msg = f"Tren {name} terpantau mulai merangkak naik. Prediksi menunjukkan kenaikan sekitar {abs(forecast_pct)}% minggu depan."
+            fallback_msg = f"Tren {name} terpantau mulai merangkak naik. Prediksi menunjukkan kenaikan sekitar {abs(forecast_pct)}% minggu depan."
         elif "TURUN" in trend:
-            msg = f"Kabar baik, tren {name} sedang menurun. Harga diprediksi turun sekitar {abs(forecast_pct)}% dalam waktu dekat."
+            fallback_msg = f"Kabar baik, tren {name} sedang menurun. Harga diprediksi turun sekitar {abs(forecast_pct)}% dalam waktu dekat."
         else:
-            msg = f"Harga {name} terpantau stabil dan diperkirakan tidak banyak berubah dalam beberapa hari ke depan."
+            fallback_msg = f"Harga {name} terpantau stabil dan diperkirakan tidak banyak berubah dalam beberapa hari ke depan."
 
-    msg += "\n\nSelalu pantau harga harian, karena faktor pasar sangat dinamis."
-    return msg
+    fallback_msg += "\n\nSelalu pantau harga harian, karena faktor pasar sangat dinamis."
+
+    if not openai_client:
+        return fallback_msg
+
+    try:
+        prompt = f"""Kamu adalah analis pasar bahan pokok (berpengalaman namun gaya bahasa luwes/menarik).
+Buatlah SATU ATAU DUA kalimat singkat yang menarik untuk disajikan di aplikasi mobile terkait komoditas {name}.
+- Tren AI memprediksi: {trend}
+- Prediksi perubahan harga: {forecast_pct}% minggu depan.
+- Kondisi/Alert HARI INI: {alert if alert else 'Relatif stabil'}.
+
+Syarat mutlak:
+1. Jangan pakai poin-poin.
+2. Gaya bahasa natural, asyik dibaca, tapi tetap profesional.
+3. Jangan mengulang-ulang angka secara kaku, gabungkan ke dalam narasi.
+4. Maksimal 40 kata."""
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=100
+        )
+        if response.choices:
+            return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"⚠️ Gagal menggunakan LLM untuk {name}: {e}")
+        
+    return fallback_msg
 
 def generate_global_insight(summary_data):
     """Memberikan analisis pasar secara keseluruhan."""
     naik = [i['name'] for i in summary_data if "NAIK" in i['trend']]
     turun = [i['name'] for i in summary_data if "TURUN" in i['trend']]
     
-    # Logika pembuka dinamis
     if len(naik) > 3:
-        msg = "Pasar sedang mengalami tren kenaikan harga di beberapa sektor utama. "
+        fallback_msg = "Pasar sedang mengalami tren kenaikan harga di beberapa sektor utama. "
     elif len(turun) > 3:
-        msg = "Pasar menunjukkan tren penurunan harga yang cukup luas hari ini. "
+        fallback_msg = "Pasar menunjukkan tren penurunan harga yang cukup luas hari ini. "
     elif len(naik) > 0 or len(turun) > 0:
-        msg = "Terdapat fluktuasi harga pada beberapa komoditas, namun pasar secara umum masih terkendali. "
+        fallback_msg = "Terdapat fluktuasi harga pada beberapa komoditas, namun pasar secara umum masih terkendali. "
     else:
-        msg = "Pasar hari ini terpantau sangat stabil tanpa perubahan harga signifikan. "
+        fallback_msg = "Pasar hari ini terpantau sangat stabil tanpa perubahan harga signifikan. "
 
     if naik:
-        msg += f"Waspadai kenaikan pada {', '.join(naik)}. "
+        fallback_msg += f"Waspadai kenaikan pada {', '.join(naik)}. "
     if turun:
-        msg += f"Potensi penghematan pada {', '.join(turun)}. "
+        fallback_msg += f"Potensi penghematan pada {', '.join(turun)}. "
     
-    msg += "\nGunakan prediksi ini sebagai referensi pendukung, masih banyak faktor eksternal yang bisa mempengaruhi harga."
-    return msg
+    fallback_msg += "\nGunakan prediksi ini sebagai referensi pendukung, masih banyak faktor eksternal yang bisa mempengaruhi harga."
+
+    if not openai_client:
+        return fallback_msg
+
+    try:
+        prompt = f"""Kamu adalah pakar ekonomi. Buatlah rangkuman pasar bahan pokok hari ini dalam maksimal 3 kalimat padat dan menarik.
+Komoditas yang diprediksi NAIK: {', '.join(naik) if naik else 'Tidak ada yang signifikan'}.
+Komoditas yang diprediksi TURUN: {', '.join(turun) if turun else 'Tidak ada yang signifikan'}.
+
+Tulis dengan gaya jurnalistik yang mengalir, seolah memberikan insight cepat untuk pemilik restoran atau ibu rumah tangga. 
+Jangan gunakan sapaan halo. Jangan pakai poin-poin. Langsung ke intinya."""
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=150
+        )
+        if response.choices:
+            return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"⚠️ Gagal menggunakan LLM untuk global insight: {e}")
+        
+    return fallback_msg
 
 def run_all_predictions():
     print("\n" + "═" * 60)
@@ -88,6 +149,13 @@ def run_all_predictions():
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     df_full, _ = load_json_data(HISTORY_FILE)
+    
+    if USE_LIVE_API:
+        print(" 🌐 Menghubungkan ke server BI (PIHPS) untuk update seluruh dataset...")
+        df_full = update_history_with_api(df_full, HISTORY_FILE)
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump({"data": df_full.to_dict(orient="records")}, f, indent=2, ensure_ascii=False)
+        print(" ✅ Dataset berhasil di-update ke tanggal terbaru.\n")
     
     success_count = 0
     fail_count = 0
@@ -112,15 +180,13 @@ def run_all_predictions():
         print(f"\n[{i}/{len(COMMODITIES)}] PROCESSING: {commodity.upper()}")
         
         try:
-            api_status = USE_LIVE_API if i == 1 else False
-            
             # 1. Run Forecast (Sekarang ambil 5 return value: df, mape, winner, scores, all_fc)
             f_df, mape, winner, all_scores, all_fc = run_pipeline(
                 json_path=HISTORY_FILE,
                 commodity_name=commodity,
                 n_days=FORECAST_DAYS,
                 out_dir=OUTPUT_DIR,
-                use_api=api_status
+                use_api=False # API sudah diupdate di awal sebelum loop
             )
             
             # 2. Get Historical Series for Chart & Current Price
