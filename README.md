@@ -1,4 +1,9 @@
-# 🚀 Quad-Hybrid Commodity Forecasting Engine (v1.0.0)
+<p align="center">
+  <img src="assets/images/engine_logo.png" width="300" alt="Quad-Hybrid Engine Logo">
+</p>
+
+<h1 align="center">🚀 Quad-Hybrid Commodity Forecasting Engine (v1.0.0)</h1>
+
 
 Sistem Backend cerdas berbasis Python yang dirancang untuk memprediksi harga komoditas pangan di Indonesia. Sistem ini menggunakan pendekatan **Quad-Hybrid Competition** untuk memastikan akurasi tertinggi setiap harinya.
 

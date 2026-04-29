@@ -46,57 +46,70 @@ COMMODITIES = [
 ]
 
 def generate_commodity_insight(name, trend, forecast_pct, alert):
-    """Menghasilkan kalimat analisis yang manusiawi dan tidak kontradiktif."""
-    fallback_msg = ""
+    """Menghasilkan analisis dua perspektif (Masyarakat & Pedagang) menggunakan LLM."""
+    
+    # Fallback default values
+    fallback_masyarakat = ""
+    fallback_pedagang = ""
+    
+    # Logic for fallback Masyarakat
     if alert:
         if "Penurunan" in alert:
-            if forecast_pct > 0.5:
-                fallback_msg = f"Meskipun {alert.lower().replace('!', '')}, namun tetap waspada karena diprediksi harga {name} akan mulai merangkak naik kembali sekitar {forecast_pct}% minggu depan."
-            else:
-                fallback_msg = f"{alert} Ini saat yang tepat untuk stok barang, karena tren ke depan diprediksi masih akan melandai turun."
+            fallback_masyarakat = f"{alert} Saatnya belanja stok bulanan selagi harga melandai."
         elif "Lonjakan" in alert:
-            if forecast_pct < -0.5:
-                fallback_msg = f"{alert} Namun kabar baiknya, harga {name} diprediksi tidak akan lama tinggi dan segera melandai turun sekitar {abs(forecast_pct)}%."
-            else:
-                fallback_msg = f"{alert} Harap antisipasi pengeluaran lebih, karena tren menunjukkan harga {name} masih berpotensi naik."
+            fallback_masyarakat = f"{alert} Sebaiknya tunda pembelian besar atau cari alternatif komoditas lain."
         else:
-            fallback_msg = f"{alert} Tetap pantau perkembangan harga {name} setiap hari."
+            fallback_masyarakat = f"{alert} Pantau harga harian untuk mendapatkan waktu beli terbaik."
     else:
         if "NAIK" in trend:
-            fallback_msg = f"Tren {name} terpantau mulai merangkak naik. Prediksi menunjukkan kenaikan sekitar {abs(forecast_pct)}% minggu depan."
+            fallback_masyarakat = f"Tren {name} diprediksi naik {abs(forecast_pct)}%. Segera stok secukupnya sebelum harga makin mahal."
         elif "TURUN" in trend:
-            fallback_msg = f"Kabar baik, tren {name} sedang menurun. Harga diprediksi turun sekitar {abs(forecast_pct)}% dalam waktu dekat."
+            fallback_masyarakat = f"Kabar baik, {name} sedang turun. Tunggu beberapa hari lagi untuk harga terendah."
         else:
-            fallback_msg = f"Harga {name} terpantau stabil dan diperkirakan tidak banyak berubah dalam beberapa hari ke depan."
+            fallback_masyarakat = f"Harga {name} stabil. Beli sesuai kebutuhan harian Anda."
 
-    fallback_msg += "\n\nSelalu pantau harga harian, karena faktor pasar sangat dinamis."
+    # Logic for fallback Pedagang
+    if "NAIK" in trend:
+        fallback_pedagang = f"Potensi margin meningkat karena tren naik. Pastikan stok aman untuk memenuhi permintaan."
+    elif "TURUN" in trend:
+        fallback_pedagang = f"Hati-hati stok menumpuk saat harga turun. Percepat perputaran stok agar tidak rugi."
+    else:
+        fallback_pedagang = f"Pasar stabil. Fokus pada efisiensi operasional dan kualitas produk."
 
     if not openai_client:
-        return fallback_msg
+        return {"masyarakat": fallback_masyarakat, "pedagang": fallback_pedagang}
 
     try:
-        prompt = f"""Kamu adalah analis pasar bahan pokok (berpengalaman namun gaya bahasa luwes/menarik).
-Buatlah SATU ATAU DUA kalimat singkat yang menarik untuk disajikan di aplikasi mobile terkait komoditas {name}.
-- Tren AI memprediksi: {trend}
-- Prediksi perubahan harga: {forecast_pct}% minggu depan.
-- Kondisi/Alert HARI INI: {alert if alert else 'Relatif stabil'}.
+        prompt = f"""Kamu adalah analis pasar bahan pokok profesional.
+Buatlah analisis singkat untuk komoditas {name} dari DUA PERSPEKTIF berbeda:
+1. MASYARAKAT (Pembeli/Konsumen): Berikan saran strategis apakah harus membeli sekarang, stok barang, atau tunda pembelian.
+2. PEDAGANG (Penjual): Berikan saran bisnis terkait manajemen stok, strategi harga, atau potensi keuntungan.
 
-Syarat mutlak:
-1. Jangan pakai poin-poin.
-2. Gaya bahasa natural, asyik dibaca, tapi tetap profesional.
-3. Jangan mengulang-ulang angka secara kaku, gabungkan ke dalam narasi.
-4. Maksimal 40 kata."""
+Data pendukung:
+- Tren AI Masa Depan: {trend}
+- Prediksi perubahan harga: {forecast_pct}% minggu depan.
+- Kondisi HARI INI: {alert if alert else 'Relatif stabil'}.
+
+Syarat:
+1. Gunakan bahasa Indonesia yang santai tapi profesional.
+2. Maksimal 30 kata per perspektif.
+3. JANGAN gunakan poin-poin.
+4. Output WAJIB dalam format JSON murni seperti ini:
+{{"masyarakat": "...", "pedagang": "..."}}"""
+
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=100
+            response_format={"type": "json_object"},
+            max_tokens=200
         )
         if response.choices:
-            return response.choices[0].message.content.strip()
+            content = response.choices[0].message.content.strip()
+            return json.loads(content)
     except Exception as e:
         print(f"⚠️ Gagal menggunakan LLM untuk {name}: {e}")
         
-    return fallback_msg
+    return {"masyarakat": fallback_masyarakat, "pedagang": fallback_pedagang}
 
 def generate_global_insight(summary_data):
     """Memberikan analisis pasar secara keseluruhan."""
