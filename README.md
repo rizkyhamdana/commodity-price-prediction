@@ -57,7 +57,6 @@ File `mobile_backend.json` menyediakan data yang siap pakai tanpa perlu pemroses
 
 *   `run_all.py`: File utama (Orchestrator). Menjalankan seluruh pipeline dari update data hingga audit.
 *   `commodity_forecaster.py`: Mesin inti AI. Berisi logika kompetisi model dan konfigurasi masing-masing algoritma.
-*   `backfill_data.py`: Modul API untuk mengambil data terbaru dari Bank Indonesia (PIHPS).
 *   `data/`: Database lokal dalam format JSON.
 *   `output/`: Folder output untuk Mobile & Grafik.
 *   `archive/`: Folder arsip harian untuk keperluan audit manual.
