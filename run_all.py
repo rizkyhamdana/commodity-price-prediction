@@ -1,6 +1,7 @@
 import json
 import os
 import logging
+import pandas as pd
 from datetime import datetime, timedelta
 from commodity_forecaster import run_pipeline, load_json_data, extract_commodity_series, update_history_with_api
 from openai import OpenAI
@@ -218,7 +219,8 @@ def run_all_predictions():
             
             series_hist = extract_commodity_series(df_full, commodity)
             # Reindex dengan kalender lengkap agar grafik linear di Flutter
-            series_hist = series_hist.reindex(full_date_range)
+            # Konversi full_date_range ke DatetimeIndex agar match dengan series_hist.index
+            series_hist = series_hist.reindex(pd.to_datetime(full_date_range, dayfirst=True))
             
             # ISI DATA KOSONG (NaN) dengan harga sebelumnya agar grafik menyambung
             series_hist = series_hist.ffill().bfill()
@@ -234,16 +236,27 @@ def run_all_predictions():
             
             for _, sub_row in all_subs.iterrows():
                 if commodity.lower() in sub_row["name"].lower():
-                    prices_series = sub_row.drop(["no", "name", "level"], errors="ignore").dropna()
+                    # Ambil hanya kolom tanggal
+                    prices_row = sub_row.drop(["no", "name", "level"], errors="ignore").dropna()
                     
-                    if len(prices_series) >= 2:
-                        last_p = float(str(prices_series.iloc[-1]).replace(",", ""))
-                        prev_p = float(str(prices_series.iloc[-2]).replace(",", ""))
-                        change_val = last_p - prev_p
-                        change_pct = (change_val / prev_p * 100) if prev_p != 0 else 0
-                        sub_trend = "▲" if change_pct > 0 else ("▼" if change_pct < 0 else "—")
-                    else:
-                        last_p = float(str(prices_series.iloc[-1]).replace(",", "")) if not prices_series.empty else 0
+                    # Buat series dengan index datetime agar bisa diurutkan
+                    try:
+                        p_idx = pd.to_datetime(prices_row.index, format="%d/%m/%Y")
+                        prices_series = pd.Series(prices_row.values, index=p_idx).sort_index()
+                        
+                        if len(prices_series) >= 2:
+                            last_p = float(str(prices_series.iloc[-1]).replace(",", ""))
+                            prev_p = float(str(prices_series.iloc[-2]).replace(",", ""))
+                            change_val = last_p - prev_p
+                            change_pct = (change_val / prev_p * 100) if prev_p != 0 else 0
+                            sub_trend = "▲" if change_pct > 0 else ("▼" if change_pct < 0 else "—")
+                        else:
+                            last_p = float(str(prices_series.iloc[-1]).replace(",", "")) if not prices_series.empty else 0
+                            change_pct = 0
+                            sub_trend = "—"
+                    except:
+                        # Fallback jika ada format tanggal aneh
+                        last_p = 0
                         change_pct = 0
                         sub_trend = "—"
 
@@ -262,15 +275,15 @@ def run_all_predictions():
             history_points = []
             # Kirim hanya 30 hari terakhir untuk efisiensi Mobile (1D, 7D, 30D)
             for d, v in series_hist.tail(30).items():
-                d_obj = datetime.strptime(d, "%d/%m/%Y")
+                # d sekarang adalah Timestamp karena index sudah DatetimeIndex
                 history_points.append({
-                    "date": d_obj.strftime("%Y-%m-%d"),
+                    "date": d.strftime("%Y-%m-%d"),
                     "price": float(v)
                 })
             
             # Forecast diawali dengan harga terakhir hari ini agar "Tersambung" di grafik
             forecast_points = [{
-                "date": datetime.strptime(last_date, "%d/%m/%Y").strftime("%Y-%m-%d"),
+                "date": last_date.strftime("%Y-%m-%d"),
                 "price": int(round(last_actual))
             }]
             # Tambahkan hasil prediksi besok dan seterusnya (Bulatkan ke Rupiah)
