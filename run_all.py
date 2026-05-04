@@ -77,8 +77,14 @@ def generate_commodity_insight(name, trend, forecast_pct, alert):
     else:
         fallback_pedagang = f"Pasar stabil. Fokus pada efisiensi operasional dan kualitas produk."
 
+    disclaimer_text = "Analisis ini dihasilkan secara otomatis oleh AI dan bersifat saran referensi. Keputusan ekonomi tetap berada di tangan pengguna."
+
     if not openai_client:
-        return {"masyarakat": fallback_masyarakat, "pedagang": fallback_pedagang}
+        return {
+            "masyarakat": fallback_masyarakat, 
+            "pedagang": fallback_pedagang,
+            "disclaimer": disclaimer_text
+        }
 
     try:
         prompt = f"""Kamu adalah analis pasar bahan pokok profesional.
@@ -86,16 +92,22 @@ Buatlah analisis singkat untuk komoditas {name} dari DUA PERSPEKTIF berbeda:
 1. MASYARAKAT (Pembeli/Konsumen): Berikan saran strategis apakah harus membeli sekarang, stok barang, atau tunda pembelian.
 2. PEDAGANG (Penjual): Berikan saran bisnis terkait manajemen stok, strategi harga, atau potensi keuntungan.
 
-Data pendukung:
-- Tren AI Masa Depan: {trend}
+Data pendukung (WAJIB DIIKUTI):
+- Tren AI Masa Depan: {trend} (Ini adalah prediksi utama, jangan dilawan)
 - Prediksi perubahan harga: {forecast_pct}% minggu depan.
 - Kondisi HARI INI: {alert if alert else 'Relatif stabil'}.
+- Pertimbangkan kondisi hari ini(wajib)
+
+Instruksi Khusus:
+- Jika tren {trend} adalah NAIK, jangan menyarankan tunda pembelian dengan alasan harga akan turun.
+- Jika tren {trend} adalah TURUN, jangan menyarankan beli sekarang dengan alasan harga akan naik.
+- Pastikan insight MASYARAKAT dan PEDAGANG konsisten dengan data Tren AI Masa Depan di atas.
 
 Syarat:
 1. Gunakan bahasa Indonesia yang santai tapi profesional.
 2. Maksimal 30 kata per perspektif.
 3. JANGAN gunakan poin-poin.
-4. Output WAJIB dalam format JSON murni seperti ini:
+4. Output WAJIB dalam format JSON murni:
 {{"masyarakat": "...", "pedagang": "..."}}"""
 
         response = openai_client.chat.completions.create(
@@ -106,11 +118,17 @@ Syarat:
         )
         if response.choices:
             content = response.choices[0].message.content.strip()
-            return json.loads(content)
+            result = json.loads(content)
+            result["disclaimer"] = disclaimer_text
+            return result
     except Exception as e:
         print(f"⚠️ Gagal menggunakan LLM untuk {name}: {e}")
         
-    return {"masyarakat": fallback_masyarakat, "pedagang": fallback_pedagang}
+    return {
+        "masyarakat": fallback_masyarakat, 
+        "pedagang": fallback_pedagang,
+        "disclaimer": disclaimer_text
+    }
 
 def generate_global_insight(summary_data):
     """Memberikan analisis pasar secara keseluruhan."""
@@ -386,6 +404,7 @@ def run_all_predictions():
         "metadata": {
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "global_analysis": generate_global_insight(mobile_data),
+            "disclaimer": "Data ini adalah hasil prediksi model AI (Machine Learning). Gunakan hanya sebagai referensi tambahan. Harga riil di pasar dapat dipengaruhi oleh faktor eksternal mendadak yang tidak terekam dalam data historis.",
             "about_us": {
                 "app_name": "Komoditas-AI",
                 "version": "1.0.0",
