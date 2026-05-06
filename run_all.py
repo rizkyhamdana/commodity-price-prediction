@@ -218,7 +218,8 @@ def run_all_predictions():
                 commodity_name=commodity,
                 n_days=FORECAST_DAYS,
                 out_dir=OUTPUT_DIR,
-                use_api=False # API sudah diupdate di awal sebelum loop
+                use_api=False, # API sudah diupdate di awal sebelum loop
+                df=df_full
             )
             
             # 2. Get Historical Series for Chart & Current Price

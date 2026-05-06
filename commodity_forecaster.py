@@ -72,14 +72,35 @@ def update_history_with_api(df: pd.DataFrame, history_path: str, sim_date: str =
             try: date_cols.append(datetime.strptime(col, "%d/%m/%Y"))
             except: continue
         if not date_cols: return df
-        start_date_obj = max(date_cols) + timedelta(days=1)
+        # Mundur 7 hari dari tanggal terakhir untuk menangkap revisi/update data lama dari API
+        start_date_obj = max(date_cols) - timedelta(days=7)
         end_date_obj = now_obj
 
     if start_date_obj > end_date_obj:
         logger.info("✅ Data history sudah up-to-date.")
         return df
 
+    # Ambil kolom tanggal terakhir yang sudah ada sebagai referensi awal
+    date_cols = [c for c in df.columns if "/" in c]
+    if date_cols:
+        last_date_col = sorted(date_cols, key=lambda x: datetime.strptime(x, "%d/%m/%Y"))[-1]
+    else:
+        last_date_col = None
+
+    # Tambahkan kolom baru untuk semua tanggal dalam rentang agar dataset lengkap (Daily)
+    all_dates_range = pd.date_range(start=start_date_obj, end=end_date_obj)
+    for d_obj in all_dates_range:
+        d_col = d_obj.strftime("%d/%m/%Y")
+        if d_col not in df.columns:
+            # Inisialisasi langsung dengan data terakhir agar tidak pernah kosong
+            if last_date_col:
+                df[d_col] = df[last_date_col]
+            else:
+                df[d_col] = np.nan
+
     current_start = start_date_obj
+    actual_last_date_api = None
+    
     while current_start <= end_date_obj:
         current_end = min(current_start + timedelta(days=180), end_date_obj)
         start_str = current_start.strftime("%Y-%m-%d")
@@ -98,15 +119,40 @@ def update_history_with_api(df: pd.DataFrame, history_path: str, sim_date: str =
             if "data" in raw_api and raw_api["data"]:
                 new_entries = raw_api["data"]
                 api_date_cols = [c for c in new_entries[0].keys() if "/" in c]
+                if api_date_cols:
+                    # Track latest date actually returned by API
+                    latest_api_col = sorted(api_date_cols, key=lambda x: datetime.strptime(x, "%d/%m/%Y"))[-1]
+                    if actual_last_date_api is None or datetime.strptime(latest_api_col, "%d/%m/%Y") > datetime.strptime(actual_last_date_api, "%d/%m/%Y"):
+                        actual_last_date_api = latest_api_col
+
                 for entry in new_entries:
                     name_api = str(entry.get("name", "")).strip().lower()
                     mask = df["name"].astype(str).str.strip().str.lower() == name_api
                     if mask.any():
                         for d_col in api_date_cols:
-                            df.loc[mask, d_col] = entry[d_col]
+                            val = entry[d_col]
+                            # Jika data API kosong atau '-', anggap sebagai NaN agar bisa diisi harga sebelumnya
+                            if val == "-" or val == "" or val is None:
+                                df.loc[mask, d_col] = np.nan
+                            else:
+                                df.loc[mask, d_col] = val
         except Exception as e:
             logger.warning(f"⚠️ Gagal menarik data chunk {start_str}: {e}")
         current_start = current_end + timedelta(days=1)
+
+    # --- LOGIKA GAP FILLING PERMANEN (Double Check) ---
+    # Mengambil semua kolom tanggal dan mengurutkannya
+    date_cols = [c for c in df.columns if "/" in c]
+    date_cols_sorted = sorted(date_cols, key=lambda x: datetime.strptime(x, "%d/%m/%Y"))
+    
+    # Lakukan ffill (Forward Fill) untuk mengisi harga kosong dengan harga hari sebelumnya
+    df[date_cols_sorted] = df[date_cols_sorted].ffill(axis=1)
+    
+    if actual_last_date_api:
+        logger.info(f"✅ Sinkronisasi selesai: Data API asli ditemukan sampai {actual_last_date_api}. (Lookback 7 hari).")
+    else:
+        logger.info(f"✅ Sinkronisasi selesai: Tidak ada data baru di API, menggunakan harga terakhir (ffill).")
+    
     return df
 
 def extract_commodity_series(df: pd.DataFrame, commodity_name: str, level_filter: int = 1) -> pd.Series:
@@ -253,9 +299,11 @@ def plot_forecast(series, forecast_dates, forecast_values, commodity_name, out_p
     plt.savefig(out_path)
     plt.close()
 
-def run_pipeline(json_path, commodity_name, n_days=7, out_dir="output", use_api=True):
+def run_pipeline(json_path, commodity_name, n_days=7, out_dir="output", use_api=True, df=None):
     """Orkestrasi utama: Ambil Data -> Kompetisi Model -> Ramalan -> Simpan JSON."""
-    df, _ = load_json_data(json_path)
+    if df is None:
+        df, _ = load_json_data(json_path)
+        
     if use_api:
         df = update_history_with_api(df, json_path)
         with open(json_path, "w", encoding="utf-8") as f:
