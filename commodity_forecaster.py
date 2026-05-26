@@ -6,9 +6,6 @@ import numpy as np
 import logging
 from datetime import datetime, timedelta
 import warnings
-import matplotlib.pyplot as plt
-
-import warnings
 
 # Bungkam semua peringatan teknis agar log bersih
 warnings.filterwarnings("ignore")
@@ -288,6 +285,14 @@ def backtest_model(series, test_days=30, model_type="arima"):
 
 def plot_forecast(series, forecast_dates, forecast_values, commodity_name, out_path):
     """Menyimpan grafik prediksi statis (Opsional)."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ImportError(
+            "matplotlib diperlukan untuk membuat grafik prediksi. "
+            "Install dependency dari requirements.txt sebelum menjalankan pipeline prediksi."
+        ) from exc
+
     plt.figure(figsize=(12, 6))
     plt.plot(series.index[-60:], series.values[-60:], label="Riwayat (60 Hari)", color="blue", marker='o')
     plt.plot(forecast_dates, forecast_values, label="Prediksi AI", color="red", linestyle="--", marker='s')
