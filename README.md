@@ -55,9 +55,16 @@ File `mobile_backend.json` menyediakan data yang siap pakai tanpa perlu pemroses
 
 ## 📂 Struktur Proyek
 
-*   `run_all.py`: File utama (Orchestrator). Menjalankan seluruh pipeline dari update data hingga audit.
-*   `commodity_forecaster.py`: Mesin inti AI. Berisi logika kompetisi model dan konfigurasi masing-masing algoritma.
-*   `data/`: Database lokal dalam format JSON.
+*   `run_all.py`: Entry point tipis untuk menjalankan seluruh generator backend mobile.
+*   `update_data.py`: Entry point untuk sinkronisasi data harga dari API BI/PIHPS.
+*   `api_server.py`: Entry point tipis untuk menjalankan API server.
+*   `commodity_forecaster.py`: Compatibility layer agar import lama tetap berjalan.
+*   `commodity_prediction/domain/`: Entity dan port/kontrak inti yang tidak bergantung pada framework, API eksternal, atau storage.
+*   `commodity_prediction/application/`: Use case dan service aplikasi seperti forecast komoditas, backtesting, dan generator backend mobile.
+*   `commodity_prediction/infrastructure/`: Adapter konkret untuk JSON/PIHPS, model ML, chart output, dan LLM insight.
+*   `commodity_prediction/interfaces/`: Interface adapter seperti FastAPI server dan CLI-facing entrypoint.
+*   `commodity_prediction/config.py`: Konfigurasi komoditas, path output, horizon prediksi, dan daftar model.
+*   `commodity_prediction/data.py`, `pipeline.py`, `features.py`, `mobile_backend.py`, `insights.py`, `plotting.py`: Facade kompatibilitas untuk import lama; implementasi utama berada di layer clean architecture.
 *   `output/`: Folder output untuk Mobile & Grafik.
 *   `archive/`: Folder arsip harian untuk keperluan audit manual.
 

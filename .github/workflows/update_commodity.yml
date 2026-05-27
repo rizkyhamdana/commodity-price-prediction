@@ -29,6 +29,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas numpy requests
 
+      - name: Validate refactored package
+        run: |
+          python -m compileall update_data.py commodity_prediction
+          python -c "from commodity_prediction.infrastructure.data import load_json_data, update_history_with_api; from commodity_prediction.config import HISTORY_FILE; print(HISTORY_FILE)"
+
       - name: Run update script
         run: |
           python update_data.py

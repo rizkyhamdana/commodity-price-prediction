@@ -2,13 +2,12 @@
 import os
 import json
 import logging
-from commodity_forecaster import load_json_data, update_history_with_api
+from commodity_prediction.config import HISTORY_FILE
+from commodity_prediction.infrastructure.data import load_json_data, update_history_with_api
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
-
-HISTORY_FILE = "commodity_history.json"
 
 def main():
     logger.info("🚀 Memulai proses pembaruan data komoditas...")
