@@ -138,6 +138,8 @@ def _build_commodity_payload(df_full, commodity, forecast_df, mape):
         "market_alert": market_alert,
         "image_asset": f"assets/images/{slug}.png",
         "insight": generate_commodity_insight(commodity, trend, round(forecast_change_pct, 2), market_alert),
+        "history": history_points,
+        "forecast": forecast_points,
         "sub_commodities": _sub_commodities(df_full, commodity),
     }
 

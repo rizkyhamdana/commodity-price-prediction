@@ -146,4 +146,6 @@ def extract_commodity_series(df: pd.DataFrame, commodity_name: str, level_filter
 
     series = pd.Series(price_dict).sort_index()
     full_idx = pd.date_range(start=series.index.min(), end=series.index.max(), freq="D")
-    return series.reindex(full_idx).interpolate(method="linear").ffill().bfill()
+    # Menggunakan ffill() (forward fill) untuk mengisi kekosongan akhir pekan dari hari Jumat terdekat.
+    # Ini sangat merepresentasikan realitas pasar pangan harian Indonesia yang cenderung flat di akhir pekan.
+    return series.reindex(full_idx).ffill().bfill()
