@@ -61,11 +61,11 @@ def update_history_with_api(
         logger.info("✅ Data history sudah up-to-date.")
         return df
 
-    last_date_col = date_cols[-1] if date_cols else None
     for d_obj in pd.date_range(start=start_date_obj, end=end_date_obj):
         d_col = d_obj.strftime("%d/%m/%Y")
         if d_col not in df.columns:
-            df[d_col] = df[last_date_col] if last_date_col else np.nan
+            df[d_col] = np.nan
+            df[d_col] = df[d_col].astype(object)
 
     current_start = start_date_obj
     actual_last_date_api = None
@@ -110,7 +110,11 @@ def update_history_with_api(
         current_start = current_end + timedelta(days=1)
 
     date_cols_sorted = _get_sorted_date_columns(df)
-    df[date_cols_sorted] = df[date_cols_sorted].ffill(axis=1)
+    df[date_cols_sorted] = df[date_cols_sorted].ffill(axis=1).bfill(axis=1)
+
+    # Sort columns chronologically: non-date columns first, then sorted date columns
+    non_date_cols = [col for col in df.columns if col not in date_cols_sorted]
+    df = df[non_date_cols + date_cols_sorted]
 
     if actual_last_date_api:
         logger.info(f"✅ Sinkronisasi selesai: Data API asli ditemukan sampai {actual_last_date_api}. (Lookback 7 hari).")
