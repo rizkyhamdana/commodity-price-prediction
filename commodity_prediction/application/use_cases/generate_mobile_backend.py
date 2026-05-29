@@ -138,9 +138,41 @@ def _build_commodity_payload(df_full, commodity, forecast_df, mape):
         "market_alert": market_alert,
         "image_asset": f"assets/images/{slug}.png",
         "insight": generate_commodity_insight(commodity, trend, round(forecast_change_pct, 2), market_alert),
-        "chart": {"history": history_points, "forecast": forecast_points},
         "sub_commodities": _sub_commodities(df_full, commodity),
     }
+
+
+def _process_single_commodity(commodity, df_full, weather_forecast=None):
+    """Memproses satu komoditas secara terisolasi untuk mendukung parallel processing."""
+    from commodity_prediction.config import FORECAST_DAYS, HISTORY_FILE, OUTPUT_DIR
+    from commodity_prediction.application.use_cases.forecast_commodity import run_pipeline
+
+    forecast_df, mape, winner, all_scores, all_forecasts = run_pipeline(
+        json_path=HISTORY_FILE,
+        commodity_name=commodity,
+        n_days=FORECAST_DAYS,
+        out_dir=OUTPUT_DIR,
+        use_api=False,
+        df=df_full,
+        weather_forecast=weather_forecast,
+    )
+
+    mobile_payload = _build_commodity_payload(df_full, commodity, forecast_df, mape)
+    audit_payload = {
+        "commodity": commodity,
+        "winner_today": winner,
+        "winner_mape_score": round(float(mape), 2),
+        "winner_combined_score": round(float(all_scores[winner]), 2) if winner in all_scores else None,
+        "all_model_combined_scores": {k: round(float(v), 2) for k, v in all_scores.items()},
+        "forecast_comparison": {
+            "dates": [item["date"] for item in forecast_df.to_dict(orient="records")],
+            "arima": [float(p) for p in all_forecasts.get("arima", [])],
+            "ets": [float(p) for p in all_forecasts.get("ets", [])],
+            "prophet": [float(p) for p in all_forecasts.get("prophet", [])],
+            "xgboost": [float(p) for p in all_forecasts.get("xgboost", [])],
+        },
+    }
+    return mobile_payload, audit_payload
 
 
 def _write_json(path, payload):
@@ -150,7 +182,7 @@ def _write_json(path, payload):
 
 def run_all_predictions():
     print("\n" + "═" * 60)
-    print(" 🚀 STARTING MOBILE BACKEND GENERATOR")
+    print(" 🚀 STARTING PARALLEL MOBILE BACKEND GENERATOR (ALL CPU CORES)")
     print(" 📱 Preparing data for Flutter Integration...")
     print("═" * 60 + "\n")
 
@@ -165,42 +197,49 @@ def run_all_predictions():
 
     success_count = 0
     fail_count = 0
-    mobile_data = []
-    audit_data = []
+    
+    # Gunakan dictionary untuk menyimpan hasil sementara agar bisa di-sorting kembali
+    mobile_dict = {}
+    audit_dict = {}
 
-    for i, commodity in enumerate(COMMODITIES, 1):
-        print(f"\n[{i}/{len(COMMODITIES)}] PROCESSING: {commodity.upper()}")
+    # Ambil prakiraan cuaca live SEBELUM memulai paralel untuk menghindari bentrokan rate-limit paralel
+    from commodity_prediction.infrastructure.ml.exogenous_fetcher import get_live_rainfall_forecast
+    try:
+        print("🌐 Menarik prakiraan cuaca Kediri (Open-Meteo) di awal...")
+        # Tarik forecast cuaca untuk hari ke depan (biasanya FORECAST_DAYS)
+        weather_forecast = get_live_rainfall_forecast(FORECAST_DAYS)
+        print("✅ Berhasil mendapatkan prakiraan cuaca untuk proses forecasting.")
+    except Exception as e:
+        print(f"⚠️ Gagal menarik prakiraan cuaca: {e}. Menggunakan fallback.")
+        weather_forecast = {}
 
-        try:
-            forecast_df, mape, winner, all_scores, all_forecasts = run_pipeline(
-                json_path=HISTORY_FILE,
-                commodity_name=commodity,
-                n_days=FORECAST_DAYS,
-                out_dir=OUTPUT_DIR,
-                use_api=False,
-                df=df_full,
-            )
+    from concurrent.futures import ProcessPoolExecutor, as_completed
 
-            mobile_data.append(_build_commodity_payload(df_full, commodity, forecast_df, mape))
-            audit_data.append(
-                {
-                    "commodity": commodity,
-                    "winner_today": winner,
-                    "winner_mape_score": round(float(mape), 2),
-                    "all_model_mape": {k: round(float(v), 2) for k, v in all_scores.items()},
-                    "forecast_comparison": {
-                        "dates": [item["date"] for item in forecast_df.to_dict(orient="records")],
-                        "arima": [float(p) for p in all_forecasts.get("arima", [])],
-                        "ets": [float(p) for p in all_forecasts.get("ets", [])],
-                        "prophet": [float(p) for p in all_forecasts.get("prophet", [])],
-                        "xgboost": [float(p) for p in all_forecasts.get("xgboost", [])],
-                    },
-                }
-            )
-            success_count += 1
-        except Exception as e:
-            print(f"❌ Error on {commodity}: {e}")
-            fail_count += 1
+    # Menjalankan proses training secara paralel menggunakan seluruh core CPU yang tersedia
+    max_cores = os.cpu_count() or 4
+    print(f"🔥 Memulai pelatihan paralel menggunakan {max_cores} Core CPU sekaligus...")
+    
+    with ProcessPoolExecutor(max_workers=max_cores) as executor:
+        futures = {
+            executor.submit(_process_single_commodity, commodity, df_full, weather_forecast): commodity 
+            for commodity in COMMODITIES
+        }
+        
+        for future in as_completed(futures):
+            commodity = futures[future]
+            try:
+                mobile_payload, audit_payload = future.result()
+                mobile_dict[commodity] = mobile_payload
+                audit_dict[commodity] = audit_payload
+                print(f"✅ Selesai memproses: {commodity.upper()}")
+                success_count += 1
+            except Exception as e:
+                print(f"❌ Gagal memproses {commodity.upper()}: {e}")
+                fail_count += 1
+
+    # SORTING KEMBALI HASH MAP SESUAI URUTAN ASLI DI VARIABEL COMMODITIES
+    mobile_data = [mobile_dict[c] for c in COMMODITIES if c in mobile_dict]
+    audit_data = [audit_dict[c] for c in COMMODITIES if c in audit_dict]
 
     mobile_backend = {
         "metadata": {

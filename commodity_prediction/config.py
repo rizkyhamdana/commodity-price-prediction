@@ -1,6 +1,6 @@
 """Shared application configuration."""
 
-HISTORY_FILE = "commodity_history.json"
+HISTORY_FILE = "data/commodity_history.json"
 OUTPUT_DIR = "output"
 FORECAST_DAYS = 7
 USE_LIVE_API = True

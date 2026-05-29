@@ -1,0 +1,38 @@
+name: Daily Commodity Forecasting and Backend Build
+
+on:
+  schedule:
+    # 06:00 WIB = 23:00 UTC (Fresh menjelang dimulainya hari perdagangan baru)
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+
+jobs:
+  build-and-predict:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # Menginstall library tambahan yang dibutuhkan oleh model-model kita
+          pip install holidays requests statsmodels pmdarima xgboost pystan==3.7.0 prophet
+
+      - name: Run Main Parallel Forecasting Pipeline
+        run: |
+          python run_all.py
+
+      - name: Commit and Push Backend & History Updates
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/commodity_history.json output/mobile_backend.json archive/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: auto-generate daily forecasting results and backend payload [skip ci]" && git push)
