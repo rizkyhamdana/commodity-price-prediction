@@ -49,5 +49,6 @@ jobs:
             echo "✅ Tidak ada perubahan data baru untuk di-commit."
           else
             git commit -m "chore(data): auto-update commodity_history.json [skip ci]"
+            git pull --rebase origin main
             git push
           fi
